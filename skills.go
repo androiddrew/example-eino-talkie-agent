@@ -151,6 +151,9 @@ func readSkill(dir string) (agentSkill, error) {
 // instructions.
 func skillsPrompt(skills []agentSkill) string {
 	var b strings.Builder
+	// gemma4:e4b, told not to use markdown or code, writes its tool calls as
+	// text unless the rule is lifted for them.
+	b.WriteString("\n\nRules about how you speak apply to what you say, not to tool calls: make tool calls as tool calls, never as text.")
 	b.WriteString("\n\nYou have these skills:\n")
 	for _, s := range skills {
 		fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)

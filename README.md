@@ -154,25 +154,39 @@ prompt.
 
 ## Models
 
-The live tests ran against two models on Ollama on the Orin:
+The live tests ran against three models on Ollama on the Orin:
 
+| Model | Plain answer, first token | Light request, first word | Skills |
+|---|---|---|---|
+| `gemma4:e4b` | 0.35 s | 0.5 s | every request, at 0.2 and 1.0 |
+| `gemma4:12b` | 2 s warm | 1.4 s | every request, at 0.2 and 1.0; ran out of memory (below) |
+| `qwen3.5:9b` | 0.4 s | 1.9 to 2.6 s | every request at 0.2 only |
+
+- **`gemma4:e4b`** is the best fit for voice: the fastest, and reliable with
+  skills. Use `-model gemma4:e4b`. Told not to use markdown or code, it wrote
+  its tool calls as text, such as `office-lights{args:["on"]}`, which talkie
+  would have spoken. The skills prompt now says that rules about speaking
+  don't apply to tool calls, and since then it has made real calls every time.
 - **`qwen3.5:9b`** answers well. With skills, at the server's default
   temperature of 1.0, it sometimes skipped the tool and said the lights were
   on anyway. Once that happened, the history taught it to keep doing so for
   the rest of the session. At temperature 0.2 it called the tool for every
   request in the live test. It needs `-temperature 0.2`, the default.
 - **`gemma4:12b`** called the tool for every request, at both 0.2 and 1.0,
-  and started speaking about 0.5 s sooner after a light request (about 1.4 s).
+  and started speaking about 0.5 s sooner than qwen after a light request
+  (about 1.4 s).
   Use `-model gemma4:12b`. Thinking is on by default in this model, so it
   needs `-reasoning none` (the default) too. With Ollama's settings on the
   Orin (a 98,304-token context, 3 parallel slots), the kernel's out-of-memory
   killer stopped its `llama-server` after about eight turns of one session.
-  The request then failed, and the reload took about 15 s. A smaller context
-  and one slot (`OLLAMA_CONTEXT_LENGTH=8192`, `OLLAMA_NUM_PARALLEL=1` on the
-  container) should avoid that.
+  The request then failed, and the reload took about 15 s. Freeing memory by
+  stopping another container didn't help: it was killed in three runs out of
+  three, after two turns. A smaller context and one slot
+  (`OLLAMA_CONTEXT_LENGTH=8192`, `OLLAMA_NUM_PARALLEL=1`, and perhaps
+  `OLLAMA_MAX_LOADED_MODELS=1` on the container) should avoid that.
 
-Both models stay under the fix-ups in the code, which are not specific to
-either model:
+All three models rely on the fix-ups in the code, which are not specific to
+any one model:
 - the turn's tool calls stay in the history;
 - what a model says after a tool call in the same message isn't spoken,
   because it can't know the result yet;
