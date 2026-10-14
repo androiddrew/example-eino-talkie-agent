@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -235,6 +236,81 @@ func TestLiveSkills(t *testing.T) {
 		}
 		if got != c.want {
 			t.Errorf("%q ran the script with %q, want %q", c.say, got, c.want)
+		}
+	}
+}
+
+// TestLiveWebSearch asks a real model questions with the repository's
+// web-search skill, searching through SearXNG, and the office-lights skill
+// with a recording script.
+func TestLiveWebSearch(t *testing.T) {
+	m := liveModel(t, "none")
+	searxng := env("SEARXNG_URL", "http://127.0.0.1:8888")
+	if resp, err := http.Get(searxng + "/healthz"); err != nil {
+		t.Skipf("SearXNG isn't running at %s: %v", searxng, err)
+	} else {
+		resp.Body.Close()
+	}
+	search, err := filepath.Abs("skills/web-search/scripts/web-search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, s := range []struct{ name, script, body string }{
+		{"web-search", "web-search", "#!/bin/sh\necho \"$*\" >> calls\nexec " + search + " \"$@\"\n"},
+		{"office-lights", "office-lights.sh", lightsScript},
+	} {
+		md, err := os.ReadFile(filepath.Join("skills", s.name, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSkill(t, dir, s.name, string(md), map[string]string{s.script: s.body})
+	}
+	runner, err := newRunner(context.Background(), m, voicePrompt, dir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAgent(runner, slog.New(slog.DiscardHandler))
+	calls := func(skill string) string {
+		path := filepath.Join(dir, skill, "calls")
+		b, _ := os.ReadFile(path)
+		_ = os.Remove(path)
+		return strings.TrimSpace(string(b))
+	}
+	for i, c := range []struct {
+		say    string
+		search bool   // a web search is expected
+		lights string // the lights script's expected arguments
+		answer string // a word the answer must contain, ignoring case
+	}{
+		{say: "Who won the 2026 World Cup?", search: true, answer: "spain"},
+		{say: "What's the tallest mountain in Africa?", search: true, answer: "kilimanjaro"},
+		{say: "How are you doing today?"},
+		{say: "Turn the lights on.", lights: "on"},
+	} {
+		var timing agentTiming
+		a.timed = func(t agentTiming) { timing = t }
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		out := &recorder{ctx: ctx}
+		err := a.respond(ctx, talkie.Turn{Session: fmt.Sprint("search_", i), Text: c.say}, out)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		queries := calls("web-search")
+		t.Logf("%q -> %q (searched %q, first_token=%v total=%v)", c.say, out.text(), queries,
+			sinceOrZero(timing.Respond, timing.FirstToken), timing.Done.Sub(timing.Respond).Round(time.Millisecond))
+		if (queries != "") != c.search {
+			t.Errorf("%q: searched %q, want a search %v", c.say, queries, c.search)
+		}
+		if got := calls("office-lights"); got != c.lights {
+			t.Errorf("%q: the lights script got %q, want %q", c.say, got, c.lights)
+		}
+		if !strings.Contains(strings.ToLower(out.text()), c.answer) {
+			t.Errorf("%q: the answer lacks %q", c.say, c.answer)
+		}
+		if strings.Contains(out.text(), "http") || strings.Contains(out.text(), ".com") {
+			t.Errorf("%q: the answer reads out a web address", c.say)
 		}
 	}
 }

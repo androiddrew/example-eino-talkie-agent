@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Search the web through SearXNG and print the top results for a model.
+
+Usage: web-search <query words...>
+
+SEARXNG_URL selects the SearXNG instance (default http://127.0.0.1:8888); its
+settings.yml must allow the json format.
+"""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+MAX_RESULTS = 5
+MAX_SNIPPET = 300
+
+
+def main():
+    query = " ".join(sys.argv[1:]).strip()
+    if not query:
+        print("Error: no search query", file=sys.stderr)
+        return 2
+    base = os.environ.get("SEARXNG_URL", "http://127.0.0.1:8888").rstrip("/")
+    url = base + "/search?" + urllib.parse.urlencode({"q": query, "format": "json", "language": "en"})
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.load(resp)
+    except (urllib.error.URLError, TimeoutError, ValueError) as err:
+        print(f"Error: search failed: {err}", file=sys.stderr)
+        return 1
+
+    lines = [f"Results for {query!r}:"]
+    for answer in data.get("answers") or []:
+        text = answer.get("answer") if isinstance(answer, dict) else answer
+        if text:
+            lines.append(f"Answer: {clip(text)}")
+    for box in data.get("infoboxes") or []:
+        if box.get("content"):
+            lines.append(f"{box.get('infobox', 'Info')}: {clip(box['content'])}")
+    n = 0
+    for r in data.get("results") or []:
+        snippet = clip(r.get("content") or "")
+        if not snippet:
+            continue
+        n += 1
+        source = urllib.parse.urlparse(r.get("url", "")).netloc.removeprefix("www.")
+        date = (r.get("publishedDate") or "")[:10]
+        meta = ", ".join(x for x in (source, date) if x)
+        lines.append(f"{n}. {clip(r.get('title') or '', 120)}: {snippet} ({meta})")
+        if n == MAX_RESULTS:
+            break
+    if n == 0 and len(lines) == 1:
+        lines.append("No results.")
+    print("\n".join(lines))
+    return 0
+
+
+def clip(text, limit=MAX_SNIPPET):
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+if __name__ == "__main__":
+    sys.exit(main())

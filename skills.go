@@ -147,10 +147,11 @@ func readSkill(dir string) (agentSkill, error) {
 	return s, nil
 }
 
-// skillsPrompt is added to the system prompt: the skills and their
-// instructions.
-func skillsPrompt(skills []agentSkill) string {
+// skillsPrompt is added to the system prompt: today's date, which the model
+// can't know, the skills and their instructions.
+func skillsPrompt(skills []agentSkill, now time.Time) string {
 	var b strings.Builder
+	b.WriteString("\n\nToday is " + now.Format("Monday, 2 January 2006") + ".")
 	// gemma4:e4b, told not to use markdown or code, writes its tool calls as
 	// text unless the rule is lifted for them.
 	b.WriteString("\n\nRules about how you speak apply to what you say, not to tool calls: make tool calls as tool calls, never as text.")
@@ -158,7 +159,7 @@ func skillsPrompt(skills []agentSkill) string {
 	for _, s := range skills {
 		fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
 	}
-	b.WriteString("\nWhen the user asks what you can do or which skills you have, name them from this list in plain words. " +
+	b.WriteString("\nWhen the user asks what you can do or which skills you have, name them from this list in plain words; otherwise don't mention them. " +
 		"For a request that needs a skill, call the tool named after the skill, as its instructions below say, before saying anything: " +
 		"the user hears what you say before the tool runs. " +
 		"Call it for every request, even one you did earlier in the conversation: saying it is done does nothing. " +
@@ -184,7 +185,7 @@ func (h skillsHandler) BeforeAgent(ctx context.Context, runCtx *adk.ChatModelAge
 	}
 	runCtx.Tools = skillTools(skills)
 	if len(skills) > 0 {
-		runCtx.Instruction += skillsPrompt(skills)
+		runCtx.Instruction += skillsPrompt(skills, time.Now())
 	}
 	return ctx, runCtx, nil
 }

@@ -204,7 +204,7 @@ func TestSkillTurn(t *testing.T) {
 		t.Fatalf("%d model calls", m.calls())
 	}
 	system := m.input(0)[0].Content
-	for _, want := range []string{"Be brief.", "- test-lights: Turn the test lights on or off.", "## Skill test-lights", `Run lights.sh with ["on"]`} {
+	for _, want := range []string{"Be brief.", "Today is " + time.Now().Format("Monday, 2 January 2006"), "- test-lights: Turn the test lights on or off.", "## Skill test-lights", `Run lights.sh with ["on"]`} {
 		if !strings.Contains(system, want) {
 			t.Errorf("the system prompt lacks %q:\n%s", want, system)
 		}

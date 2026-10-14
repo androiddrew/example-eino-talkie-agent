@@ -7,8 +7,10 @@ LLM (Ollama by default), and talkie speaks the answer a sentence at a time as
 it streams in. You can interrupt it, and on the next turn the agent knows how
 much of its reply you actually heard.
 
-The agent can use **skills**, such as turning the office lights on. Ask it
-"what skills do you have?" or "turn the lights on".
+The agent can use **skills**: it turns the office lights on, and searches the
+web to answer questions about facts instead of relying on what the model
+remembers. Ask it "what skills do you have?", "turn the lights on" or "who
+won the 2026 World Cup?".
 
 It is an example, and a test of talkie-core's public API (`talkie.New`,
 `Agent`, `Turn`, `Reply`, `Interruption`, `Run`, `Config.OnEvent`) with a real
@@ -107,14 +109,76 @@ A skill is a directory in `~/.config/eino-talkie-agent/skills` (or under
 
 `SKILL.md` has YAML front matter with a `name` (letters, digits, `-` and
 `_`; it defaults to the directory's name) and a `description`, then
-instructions for the model. [`skills/office-lights/SKILL.md`](skills/office-lights/SKILL.md)
-is the office lights skill. To install it:
+instructions for the model. The repository's [`skills`](skills) directory
+has two skills:
+- `office-lights` controls the office lights;
+- `web-search` searches the web.
+
+To install `office-lights`:
 
 ```
 mkdir -p ~/.config/eino-talkie-agent/skills/office-lights/scripts
 cp skills/office-lights/SKILL.md ~/.config/eino-talkie-agent/skills/office-lights/
 ln -s ~/.scripts/office-lights.sh ~/.config/eino-talkie-agent/skills/office-lights/scripts/
 ```
+
+### Web search
+
+`web-search` searches through a [SearXNG](https://docs.searxng.org)
+instance, a self-hosted metasearch engine that needs no API key. Its script,
+[`skills/web-search/scripts/web-search`](skills/web-search/scripts/web-search),
+is Python with only the standard library. It prints the top five results,
+each with a title, a snippet and its source, for the model to answer from.
+`SEARXNG_URL` selects the instance; the default is `http://127.0.0.1:8888`.
+
+To run SearXNG on this machine, listening only locally, with the JSON API
+on, write `~/.config/searxng/settings.yml`:
+
+```yaml
+use_default_settings: true
+server:
+  secret_key: "..."         # openssl rand -hex 32
+  limiter: false
+  image_proxy: false
+search:
+  safe_search: 1
+  formats: [html, json]
+outgoing:
+  request_timeout: 1.5      # a voice answer waits on the search
+  max_request_timeout: 2.0
+engines:
+  - name: brave             # rate-limits SearXNG
+    disabled: true
+```
+
+Then start it:
+
+```
+docker run -d --name searxng --restart unless-stopped -p 127.0.0.1:8888:8080 \
+  -v ~/.config/searxng:/etc/searxng searxng/searxng:latest
+```
+
+The container takes ownership of `settings.yml`. To edit it later, run
+`docker exec -it searxng vi /etc/searxng/settings.yml`, then
+`docker restart searxng`. Searches take 0.5 to 1.5 s. Some engines refuse
+SearXNG (DuckDuckGo sometimes shows a CAPTCHA), but Google's results come
+through.
+
+To install the skill:
+
+```
+mkdir -p ~/.config/eino-talkie-agent/skills
+cp -r skills/web-search ~/.config/eino-talkie-agent/skills/
+```
+
+The skill tells the model to search before answering any question about
+facts in the world, especially anything recent, and not to search for
+chit-chat. Every turn's system prompt includes today's date, so "latest"
+and "today" mean something. With `gemma4:e4b`, a searched answer starts
+speaking about 2 s after the question, against about 0.3 s for an answer from
+memory.
+
+### How skills work
 
 Before each turn the agent reads the skills, so a new or edited skill applies
 on the next question without a restart. Each skill's description and
@@ -255,5 +319,8 @@ The unit tests use a fake eino chat model and need neither a network nor ONNX
 Runtime. The live tests run one real turn, a turn cancelled after its first
 delta, and ten light requests in different words. The light requests use the
 repository's office-lights skill with a script that only records its
-arguments, so no real lights change. Set `OPENAI_API_MODEL` to test another
+arguments, so no real lights change. `TestLiveWebSearch` uses the real
+web-search skill, so it needs SearXNG running. It checks that the model
+searches for facts, doesn't search for chit-chat, and still uses the lights
+skill. Set `OPENAI_API_MODEL` to test another
 model, and `EINO_TALKIE_TEST_TEMP` to test another temperature.
