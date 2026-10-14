@@ -18,6 +18,7 @@ import (
 // then block until their context is done, as a model still generating would.
 type fakeModel struct {
 	chunks []*schema.Message
+	turns  [][]*schema.Message // if set, the chunks of each call in turn
 	delay  time.Duration
 	blocks int
 	err    error // returned by Stream
@@ -42,6 +43,10 @@ func (f *fakeModel) Stream(ctx context.Context, input []*schema.Message, _ ...mo
 	f.inputs = append(f.inputs, append([]*schema.Message(nil), input...))
 	f.exited = exited
 	block := len(f.inputs) <= f.blocks
+	chunks := f.chunks
+	if n := len(f.inputs); n <= len(f.turns) {
+		chunks = f.turns[n-1]
+	}
 	f.mu.Unlock()
 	if f.err != nil {
 		close(exited)
@@ -51,7 +56,7 @@ func (f *fakeModel) Stream(ctx context.Context, input []*schema.Message, _ ...mo
 	go func() {
 		defer close(exited)
 		defer sw.Close()
-		for _, c := range f.chunks {
+		for _, c := range chunks {
 			select {
 			case <-time.After(f.delay):
 			case <-ctx.Done():
@@ -144,7 +149,7 @@ func (r *recorder) text() string {
 
 func newTestAgent(t *testing.T, m *fakeModel) *Agent {
 	t.Helper()
-	runner, err := newRunner(context.Background(), m, "Be brief.")
+	runner, err := newRunner(context.Background(), m, "Be brief.", "", slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,5 +356,16 @@ func TestMarkdownIsFiltered(t *testing.T) {
 	}
 	if got, want := out.text(), "Top cities:\nParis, see .\nRome"; got != want {
 		t.Errorf("spoke %q, want %q", got, want)
+	}
+}
+
+func TestToolLogDropsUnansweredCalls(t *testing.T) {
+	var l toolLog
+	l.add(toolCall("a", "skill", `{}`))
+	l.add(&schema.Message{Role: schema.Tool, ToolCallID: "a", Content: "ok"})
+	l.add(toolCall("b", "test-lights", `{}`)) // interrupted before its result
+	got := l.take()
+	if len(got) != 2 || got[0].ToolCalls[0].ID != "a" || got[1].ToolCallID != "a" {
+		t.Errorf("took %v", got)
 	}
 }

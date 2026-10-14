@@ -33,8 +33,8 @@ func newHistory() *history {
 
 // begin waits for the previous turn, applies turn to the history and returns
 // the messages for the model, with record, which the turn must call exactly
-// once with the reply it wrote.
-func (h *history) begin(ctx context.Context, turn talkie.Turn) (msgs []*schema.Message, record func(reply string), err error) {
+// once with the reply it wrote and the tool calls it made, with their results.
+func (h *history) begin(ctx context.Context, turn talkie.Turn) (msgs []*schema.Message, record func(reply string, tools []*schema.Message), err error) {
 	h.mu.Lock()
 	prev, done := h.done, make(chan struct{})
 	h.done = done
@@ -62,14 +62,20 @@ func (h *history) begin(ctx context.Context, turn talkie.Turn) (msgs []*schema.M
 	h.msgs = append(h.msgs, schema.UserMessage(turn.Text))
 	msgs = append([]*schema.Message(nil), h.msgs...)
 	session := turn.Session
-	return msgs, func(reply string) {
+	return msgs, func(reply string, tools []*schema.Message) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		if reply = strings.TrimSpace(reply); reply != "" && h.session == session {
+		defer close(done)
+		if h.session != session {
+			return
+		}
+		// The tools ran whether or not the reply was heard, so they stay;
+		// only the reply is provisional.
+		h.msgs = append(h.msgs, tools...)
+		if reply = strings.TrimSpace(reply); reply != "" {
 			h.msgs = append(h.msgs, schema.AssistantMessage(reply, nil))
 			h.last = len(h.msgs) - 1
 		}
-		close(done)
 	}, nil
 }
 

@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,11 +28,25 @@ func liveModel(t *testing.T, reasoning string) *watchedModel {
 	if baseURL == "" {
 		t.Skip("set EINO_TALKIE_TEST_LLM to an OpenAI-compatible base URL to run against a real model")
 	}
-	cm, err := newChatModel(context.Background(), baseURL, env("OPENAI_API_MODEL", "qwen3.5:9b"), env("OPENAI_API_KEY", "ollama"), reasoning)
+	cm, err := newChatModel(context.Background(), baseURL, env("OPENAI_API_MODEL", "qwen3.5:9b"), env("OPENAI_API_KEY", "ollama"), reasoning, liveTemperature(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &watchedModel{ToolCallingChatModel: cm}
+}
+
+// liveTemperature is EINO_TALKIE_TEST_TEMP, negative for the server's
+// default, or -temperature's default.
+func liveTemperature(t *testing.T) float64 {
+	v := os.Getenv("EINO_TALKIE_TEST_TEMP")
+	if v == "" {
+		return 0.2
+	}
+	temp, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		t.Fatalf("EINO_TALKIE_TEST_TEMP: %v", err)
+	}
+	return temp
 }
 
 // watchedModel notes what the model streams before the adapter sees it.
@@ -59,7 +77,7 @@ func (w *watchedModel) reasoned() string {
 
 func liveAgent(t *testing.T, m model.ToolCallingChatModel) *Agent {
 	t.Helper()
-	runner, err := newRunner(context.Background(), m, voicePrompt)
+	runner, err := newRunner(context.Background(), m, voicePrompt, "", slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,4 +171,70 @@ func TestLiveThinkingFirstToken(t *testing.T) {
 	}
 	t.Logf("thinking on: first reasoning %v, first answer token %v, total %v, %d reasoning chars",
 		firstReasoning, firstContent, time.Since(start), len(m.reasoned()))
+}
+
+// TestLiveSkills asks a real model what skills it has, then gives it light
+// requests in different words, with the repository's office-lights skill and
+// a script that only records its arguments.
+func TestLiveSkills(t *testing.T) {
+	m := liveModel(t, "none")
+	skillMD, err := os.ReadFile("skills/office-lights/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	sd := writeSkill(t, dir, "office-lights", string(skillMD), map[string]string{"office-lights.sh": lightsScript})
+	runner, err := newRunner(context.Background(), m, voicePrompt, dir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAgent(runner, slog.New(slog.DiscardHandler))
+	session := 0
+	turn := func(text string) string {
+		t.Helper()
+		var timing agentTiming
+		a.timed = func(t agentTiming) { timing = t }
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		out := &recorder{ctx: ctx}
+		if err := a.respond(ctx, talkie.Turn{Session: fmt.Sprint("live_", session), Text: text}, out); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%q -> %q (first_token=%v total=%v)", text, out.text(), sinceOrZero(timing.Respond, timing.FirstToken), timing.Done.Sub(timing.Respond).Round(time.Millisecond))
+		return out.text()
+	}
+	calls := func() string {
+		b, _ := os.ReadFile(filepath.Join(sd, "calls"))
+		_ = os.Remove(filepath.Join(sd, "calls"))
+		return strings.TrimSpace(string(b))
+	}
+
+	if answer := turn("What skills do you have?"); !strings.Contains(strings.ToLower(answer), "light") {
+		t.Errorf("the answer doesn't mention the lights skill")
+	}
+	if c := calls(); c != "" {
+		t.Errorf("asking about skills ran the script: %q", c)
+	}
+	// One session, so later requests follow earlier ones done the same way.
+	for _, c := range []struct{ say, want string }{
+		{"Turn the lights on.", "on"},
+		{"Now turn them off.", "off"},
+		{"Lights on please.", "on"},
+		{"Can you switch off the office lights?", "off"},
+		{"Make the lights warm.", "morning"},
+		{"It's too bright in here, dim them.", "half"},
+		{"Give me cool daylight.", "day"},
+		{"Full brightness, please.", "full"},
+		{"Turn the lights on and make them warm.", "morning\non"}, // sorted
+	} {
+		turn(c.say)
+		got := calls()
+		if lines := strings.Split(got, "\n"); len(lines) == 2 { // either order
+			sort.Strings(lines)
+			got = strings.Join(lines, "\n")
+		}
+		if got != c.want {
+			t.Errorf("%q ran the script with %q, want %q", c.say, got, c.want)
+		}
+	}
 }

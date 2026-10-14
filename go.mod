@@ -8,6 +8,7 @@ require (
 	github.com/androiddrew/talkie-core v0.0.0-00010101000000-000000000000
 	github.com/cloudwego/eino v0.8.6
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.11
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -53,5 +54,4 @@ require (
 	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

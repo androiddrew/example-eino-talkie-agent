@@ -7,6 +7,9 @@ LLM (Ollama by default), and talkie speaks the answer a sentence at a time as
 it streams in. You can interrupt it, and on the next turn the agent knows how
 much of its reply you actually heard.
 
+The agent can use **skills**, such as turning the office lights on. Ask it
+"what skills do you have?" or "turn the lights on".
+
 It is an example, and a test of talkie-core's public API (`talkie.New`,
 `Agent`, `Turn`, `Reply`, `Interruption`, `Run`, `Config.OnEvent`) with a real
 agent framework.
@@ -76,6 +79,8 @@ printf 'what is the capital of France\nand of Spain\n' | go run . -text
 | `-model` | `OPENAI_API_MODEL` | `qwen3.5:9b` | e.g. `lukey03/qwen3.5-9b-abliterated:latest` |
 | `-api-key` | `OPENAI_API_KEY` | `ollama` | Ollama ignores it |
 | `-reasoning` | | `none` | sent as `reasoning_effort`. `low`, `medium` and `high` turn thinking on (see below) |
+| `-temperature` | | `0.2` | sampling temperature (see [Models](#models)); negative leaves it to the server |
+| `-skills` | | `$XDG_CONFIG_HOME/eino-talkie-agent/skills` | the skills directory; `""` for none |
 | `-instruction` | | a voice prompt | the system prompt |
 | `-text` | | off | no audio: stdin turns, printed replies |
 
@@ -85,6 +90,93 @@ computer"), `-input`, `-output`, `-no-echo-cancel`, `-barge-in` (default
 `wake`, so only the wake word interrupts by voice; `voice` also lets you talk
 over the agent, and `off` leaves only Enter or Pause), `-key`, `-no-chime`,
 `-latency` and `-v`.
+
+## Skills
+
+A skill is a directory in `~/.config/eino-talkie-agent/skills` (or under
+`$XDG_CONFIG_HOME`) containing a `SKILL.md` in the
+[Agent Skills](https://agentskills.io) format, plus its executables in
+`scripts/`:
+
+```
+~/.config/eino-talkie-agent/skills/office-lights/
+├── SKILL.md
+└── scripts/
+    └── office-lights.sh -> ~/.scripts/office-lights.sh
+```
+
+`SKILL.md` has YAML front matter with a `name` (letters, digits, `-` and
+`_`; it defaults to the directory's name) and a `description`, then
+instructions for the model. [`skills/office-lights/SKILL.md`](skills/office-lights/SKILL.md)
+is the office lights skill. To install it:
+
+```
+mkdir -p ~/.config/eino-talkie-agent/skills/office-lights/scripts
+cp skills/office-lights/SKILL.md ~/.config/eino-talkie-agent/skills/office-lights/
+ln -s ~/.scripts/office-lights.sh ~/.config/eino-talkie-agent/skills/office-lights/scripts/
+```
+
+Before each turn the agent reads the skills, so a new or edited skill applies
+on the next question without a restart. Each skill's description and
+instructions go in the system prompt, and each skill becomes a tool named
+after it. The tool runs one of the skill's scripts with the arguments the
+model gives it. The script runs directly, without a shell, from the skill's
+directory, for at most 30 seconds. A skill with one script takes only `args`;
+a skill with several also takes the script's name. The model has no other way
+to run anything.
+
+The scripts inherit the agent's environment. `office-lights.sh` needs
+`HASSIO_TOKEN`, which `~/.bashrc` sets. Note that it exits 0 even when the
+request to Home Assistant fails, so the agent can't tell when it didn't work.
+
+A tool error, such as a missing script, goes back to the model as the tool's
+result, so it can tell you what went wrong instead of the turn failing. Each
+turn's tool calls and results stay in the session's history.
+
+### Why not eino's skill middleware
+
+eino v0.8.6 has a skill middleware (`adk/middlewares/skill`). It loads a
+skill's instructions only when the model asks for them with a tool call, and
+it leaves running scripts to another tool. Tested with `qwen3.5:9b`, it was
+slower and less reliable for voice:
+
+| | First word after "turn the lights on" | Live test |
+|---|---|---|
+| eino's middleware + a `run_skill_script` tool | about 5 s | 3 of 4 runs passed |
+| instructions in the prompt + `run_skill_script` | about 3.2 s | 10 of 11 runs passed |
+| instructions in the prompt + a tool per skill, temperature 0.2 | about 1.9 s | every run after the final SKILL.md, over 100 requests |
+
+With the middleware, the model sometimes loaded the skill and then said the
+lights were on without running the script. Its tool description also uses
+"pdf" and "xlsx" as example skill names, which the model then claimed to
+have. A voice assistant's skills are few and short, so they all go in the
+prompt.
+
+## Models
+
+The live tests ran against two models on Ollama on the Orin:
+
+- **`qwen3.5:9b`** answers well. With skills, at the server's default
+  temperature of 1.0, it sometimes skipped the tool and said the lights were
+  on anyway. Once that happened, the history taught it to keep doing so for
+  the rest of the session. At temperature 0.2 it called the tool for every
+  request in the live test. It needs `-temperature 0.2`, the default.
+- **`gemma4:12b`** called the tool for every request, at both 0.2 and 1.0,
+  and started speaking about 0.5 s sooner after a light request (about 1.4 s).
+  Use `-model gemma4:12b`. Thinking is on by default in this model, so it
+  needs `-reasoning none` (the default) too. With Ollama's settings on the
+  Orin (a 98,304-token context, 3 parallel slots), the kernel's out-of-memory
+  killer stopped its `llama-server` after about eight turns of one session.
+  The request then failed, and the reload took about 15 s. A smaller context
+  and one slot (`OLLAMA_CONTEXT_LENGTH=8192`, `OLLAMA_NUM_PARALLEL=1` on the
+  container) should avoid that.
+
+Both models stay under the fix-ups in the code, which are not specific to
+either model:
+- the turn's tool calls stay in the history;
+- what a model says after a tool call in the same message isn't spoken,
+  because it can't know the result yet;
+- tool errors go back to the model.
 
 ## Room training
 
@@ -116,7 +208,8 @@ was complete about 1 s after the agent was called.
 - `agent.go` is the `talkie.Agent` adapter. Each turn appends the user's text
   to the session's history and runs the eino runner with streaming on. It
   forwards each assistant content delta, filtered, to the reply, and ignores
-  reasoning and tool calls. On an interruption, the context is cancelled: the
+  reasoning. Tool calls and their results are kept for the history, and text
+  after a tool call in the same message isn't spoken. On an interruption, the context is cancelled: the
   adapter closes the model's stream, which cancels the HTTP request so Ollama
   stops generating, and returns. If the model can't be reached, it says
   "Sorry, I couldn't reach the language model."
@@ -130,6 +223,8 @@ was complete about 1 s after the agent was called.
   prose, so the filter only drops what it reads badly: URLs (spelled out
   letter by letter), fenced code, list numbers at the start of a line (talkie
   would speak "1." as a sentence) and `<think>` blocks.
+- `skills.go` reads the skills, builds the system prompt and the tool for
+  each skill, and turns tool errors into results.
 - `latency.go` joins talkie's events from `Config.OnEvent` with the agent's
   timings over a buffered channel. OnEvent never blocks: when the channel is
   full, the record is dropped and counted.
@@ -143,5 +238,8 @@ EINO_TALKIE_TEST_LLM=... EINO_TALKIE_TEST_THINKING=1 go test -run LiveThinking -
 ```
 
 The unit tests use a fake eino chat model and need neither a network nor ONNX
-Runtime. The live tests run one real turn, and a turn cancelled after its
-first delta, against the server.
+Runtime. The live tests run one real turn, a turn cancelled after its first
+delta, and ten light requests in different words. The light requests use the
+repository's office-lights skill with a script that only records its
+arguments, so no real lights change. Set `OPENAI_API_MODEL` to test another
+model, and `EINO_TALKIE_TEST_TEMP` to test another temperature.

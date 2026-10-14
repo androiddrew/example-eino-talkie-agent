@@ -29,6 +29,7 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -42,8 +43,10 @@ func main() {
 		modelID     = flag.String("model", env("OPENAI_API_MODEL", "qwen3.5:9b"), "model name")
 		apiKey      = flag.String("api-key", env("OPENAI_API_KEY", "ollama"), "API key (Ollama ignores it)")
 		reasoning   = flag.String("reasoning", "none", `reasoning effort: "none" turns thinking off; "low", "medium" and "high" are too slow for voice`)
+		temp        = flag.Float64("temperature", 0.2, "sampling temperature; low keeps skill use reliable; negative for the server's default")
 		instruction = flag.String("instruction", voicePrompt, "system prompt")
 		textMode    = flag.Bool("text", false, "no audio: read turns from stdin and print the replies")
+		skillsDir   = flag.String("skills", defaultSkillsDir(), `directory of skills, each a directory with a SKILL.md; "" for none`)
 
 		ort      = flag.String("ort", os.Getenv("TALKIE_ORT"), "ONNX Runtime library, a path or loader name")
 		cuda     = flag.Bool("cuda", false, "run speech-to-text and text-to-speech on the GPU")
@@ -70,11 +73,11 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	cm, err := newChatModel(ctx, *baseURL, *modelID, *apiKey, *reasoning)
+	cm, err := newChatModel(ctx, *baseURL, *modelID, *apiKey, *reasoning, *temp)
 	if err != nil {
 		fail(err)
 	}
-	runner, err := newRunner(ctx, cm, *instruction)
+	runner, err := newRunner(ctx, cm, *instruction, *skillsDir, log)
 	if err != nil {
 		fail(err)
 	}
@@ -158,24 +161,53 @@ func main() {
 
 // newChatModel connects to an OpenAI-compatible server such as Ollama.
 // reasoning is sent as reasoning_effort; Ollama takes "none" to turn a
-// model's thinking off.
-func newChatModel(ctx context.Context, baseURL, modelID, apiKey, reasoning string) (model.ToolCallingChatModel, error) {
+// model's thinking off. A negative temperature leaves it to the server.
+func newChatModel(ctx context.Context, baseURL, modelID, apiKey, reasoning string, temp float64) (model.ToolCallingChatModel, error) {
+	var temperature *float32
+	if temp >= 0 {
+		t := float32(temp)
+		temperature = &t
+	}
 	return openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		BaseURL:         baseURL,
 		Model:           modelID,
 		APIKey:          apiKey,
 		ReasoningEffort: openai.ReasoningEffortLevel(reasoning),
+		Temperature:     temperature,
 	})
 }
 
-// newRunner wraps the model in a streaming eino ChatModelAgent with no tools.
-func newRunner(ctx context.Context, cm model.ToolCallingChatModel, instruction string) (*adk.Runner, error) {
-	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
+// newRunner wraps the model in a streaming eino ChatModelAgent with the
+// skills in skillsDir, read before each turn; "" gives it none.
+func newRunner(ctx context.Context, cm model.ToolCallingChatModel, instruction, skillsDir string, log *slog.Logger) (*adk.Runner, error) {
+	cfg := &adk.ChatModelAgentConfig{
 		Name:        "TalkieVoiceAgent",
 		Description: "A voice assistant whose replies are spoken by talkie.",
 		Instruction: instruction,
 		Model:       cm,
-	})
+	}
+	if skillsDir != "" {
+		skills := skillDir{dir: skillsDir, log: log}
+		found, err := skills.load()
+		if err != nil {
+			return nil, fmt.Errorf("skills: %w", err)
+		}
+		names := make([]string, len(found))
+		for i, s := range found {
+			names[i] = s.Name
+		}
+		log.Info("skills", "dir", skillsDir, "names", strings.Join(names, ","))
+		cfg.Handlers = []adk.ChatModelAgentMiddleware{skillsHandler{skills: skills}, toolErrors{log: log}}
+		// The handler replaces the tools before each turn, but the agent
+		// starts with some: eino v0.8.6 drops UnknownToolsHandler when a
+		// handler adds an agent's first tool.
+		cfg.ToolsConfig.Tools = []tool.BaseTool{&skillTool{skill: agentSkill{Name: "no_skills", Description: "No skills."}}}
+		cfg.ToolsConfig.UnknownToolsHandler = func(_ context.Context, name, args string) (string, error) {
+			log.Warn("call to an unknown tool", "tool", name, "args", args)
+			return fmt.Sprintf("error: there is no tool named %q", name), nil
+		}
+	}
+	agent, err := adk.NewChatModelAgent(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
