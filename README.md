@@ -48,6 +48,53 @@ your first question. Then talkie loads its models and plays the ready chime.
 - "Goodbye" (or "bye", "that's all", "stop listening") gets a short goodbye
   and ends the session. The next question needs the wake word.
 
+### The full voice setup
+
+Everything together: speech in and out on the GPU, `gemma4:e4b` on the Orin,
+the wake word, wake-word barge-in, and both skills.
+
+Before you start, check:
+- **Ollama** serves the model:
+  `curl -s http://orin.runcible.io:11434/api/tags | grep gemma4:e4b`
+- **SearXNG** is running, for web search:
+  `curl -s http://127.0.0.1:8888/healthz` prints `OK`
+- **`HASSIO_TOKEN`** is set in this shell, for the office lights:
+  `test -n "$HASSIO_TOKEN" && echo set`
+- **The skills** are installed: `ls ~/.config/eino-talkie-agent/skills`
+  lists `office-lights` and `web-search`
+- **The room** is trained, which only needs doing once per room and devices:
+  `cd ../talkie-core && go run ./cmd/talkie-demo -train -ort ... -kokoro ...`
+
+Then launch:
+
+```
+go run . \
+  -model gemma4:e4b \
+  -cuda -ort /opt/onnxruntime/1.22.0-cuda12/lib/libonnxruntime.so \
+  -parakeet /home/toor/experiments/go-parakeet/runtime-assets/parakeet \
+  -kokoro /home/toor/experiments/go-kokoro/tmp/kokoro \
+  -voice af_heart \
+  -wake "hey computer" \
+  -barge-in wake \
+  -key /dev/input/by-id/usb-Logitech_G413_Carbon_Mechanical_Gaming_Keyboard_186631473431-event-kbd
+```
+
+`-key` lets the Pause key interrupt even when the terminal isn't focused. It
+needs read access to the keyboard: run `sudo usermod -aG input $USER` and log
+in again, or leave the flag out and press Enter instead. Add `-v` to log
+every state change, `-input` and `-output` to pick devices by part of their
+names, and `-skills ""` to run without skills.
+
+When the chime plays, try:
+1. "Hey computer, what skills do you have?"
+2. "Hey computer, turn the lights on." Within the follow-up window you can
+   go on without the wake word: "Make them warm."
+3. "Hey computer, who won the 2026 World Cup?" It searches the web, then
+   answers.
+4. "Hey computer, tell me about the history of Rome." Interrupt it with "hey
+   computer" or Pause, then ask "what were you just saying?"
+5. "Goodbye" ends the session.
+
 Each reply logs a `turn_latency` line:
 
 | Field | Meaning |
