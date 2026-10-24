@@ -1,16 +1,17 @@
 # example-eino-talkie-agent
 
 Talk with an [eino](https://github.com/cloudwego/eino) agent through
-[talkie-core](https://github.com/androiddrew/talkie-core). Say the wake word and ask something. talkie
-transcribes it, an eino `ChatModelAgent` answers through an OpenAI-compatible
+[talkie-core](https://github.com/androiddrew/talkie-core). Say the wake word
+and ask something. talkie transcribes it, an eino `ChatModelAgent` answers through an OpenAI-compatible
 LLM (Ollama by default), and talkie speaks the answer a sentence at a time as
 it streams in. You can interrupt it, and on the next turn the agent knows how
 much of its reply you actually heard.
 
-The agent can use **skills**: it turns the office lights on, and searches the
-web to answer questions about facts instead of relying on what the model
-remembers. Ask it "what skills do you have?", "turn the lights on" or "who
-won the 2026 World Cup?".
+The agent can use **skills**: it turns the office lights on through Home
+Assistant, searches the web to answer questions about facts instead of
+relying on what the model remembers, and tells children's stories. Ask it
+"what skills do you have?", "turn the lights on" or "who won the 2026 World
+Cup?".
 
 It is an example, and a test of talkie-core's public API (`talkie.New`,
 `Agent`, `Turn`, `Reply`, `Interruption`, `Run`, `Config.OnEvent`) with a real
@@ -18,23 +19,29 @@ agent framework.
 
 ## Prerequisites
 
-- **Go 1.25** and a C toolchain (talkie-core uses CGO).
-- **talkie-core** v0.1.0, which `go` downloads.
-- **ONNX Runtime 1.22**. Use a CUDA build for `-cuda`.
-- **Models.** You need Parakeet TDT 0.6B v3 (`nemo128.onnx`,
-  `encoder-model.onnx` with its `.onnx.data`, `decoder_joint-model.onnx`) and
-  Kokoro v1.0 (`kokoro-v1.0.onnx`, `voices-v1.0.bin`). The wake word and VAD
-  models are embedded in their Go modules.
+- **Linux**, **Go 1.25** and a C toolchain (talkie-core uses CGO), with a
+  microphone and a speaker.
+- **ONNX Runtime 1.22, Parakeet TDT 0.6B v3 and Kokoro v1.0.** talkie-core's
+  `get-assets.sh` downloads them into `./assets`, each file pinned and checked
+  against its SHA256 (about 1 GB):
+  ```
+  curl -fsSL https://raw.githubusercontent.com/androiddrew/talkie-core/v0.1.0/scripts/get-assets.sh | bash
+  ```
+  Add `-s -- --cuda` after `bash` for the GPU build, which needs CUDA 12 and
+  cuDNN 9. The wake word and VAD models are embedded in their Go modules.
 - **An OpenAI-compatible LLM server.** The default is Ollama at
-  `http://orin.runcible.io:11434/v1` with `qwen3.5:9b`.
+  `http://localhost:11434/v1` with `gemma4:e4b` (`ollama pull gemma4:e4b`).
 
 ## Run it
 
+Train talkie to the room once (see [Room training](#room-training)), then:
+
 ```
-go run . -cuda -ort /opt/onnxruntime/1.22.0-cuda12/lib/libonnxruntime.so \
-  -parakeet /home/toor/experiments/go-parakeet/runtime-assets/parakeet \
-  -kokoro /home/toor/experiments/go-kokoro/tmp/kokoro -v
+go run . -ort assets/onnxruntime/lib/libonnxruntime.so \
+  -parakeet assets/parakeet -int8 -kokoro assets/kokoro
 ```
+
+Add `-cuda` if you downloaded the GPU build.
 
 At start-up it asks the model for one token, so Ollama loads the model before
 your first question. Then talkie loads its models and plays the ready chime.
@@ -49,33 +56,32 @@ your first question. Then talkie loads its models and plays the ready chime.
 
 ### The full voice setup
 
-Everything together: speech in and out on the GPU, `gemma4:e4b` on the Orin,
-the wake word, wake-word barge-in, and both skills.
+Everything together: speech in and out on the GPU, the wake word, wake-word
+barge-in, and the skills.
 
 Before you start, check:
 - **Ollama** serves the model:
-  `curl -s http://orin.runcible.io:11434/api/tags | grep gemma4:e4b`
+  `curl -s http://localhost:11434/api/tags | grep gemma4:e4b`
 - **SearXNG** is running, for web search:
   `curl -s http://127.0.0.1:8888/healthz` prints `OK`
-- **`HASSIO_TOKEN`** is set in this shell, for the office lights:
-  `test -n "$HASSIO_TOKEN" && echo set`
+- **Home Assistant** is set up in this shell, for the office lights (see
+  [Office lights](#office-lights)): `HASSIO_TOKEN`, `OFFICE_LIGHTS` and, unless
+  it's at `http://homeassistant.local:8123`, `HASSIO_API`
 - **The skills** are installed: `ls ~/.config/eino-talkie-agent/skills`
-  lists `office-lights` and `web-search`
-- **The room** is trained, which only needs doing once per room and devices:
-  `go run github.com/androiddrew/talkie-core/cmd/talkie-demo@v0.1.0 -train -ort ... -kokoro ...`
+  lists `kids-story`, `office-lights` and `web-search`
+- **The room** is trained, which only needs doing once per room and devices
+  (see [Room training](#room-training))
 
 Then launch:
 
 ```
 go run . \
-  -model gemma4:e4b \
-  -cuda -ort /opt/onnxruntime/1.22.0-cuda12/lib/libonnxruntime.so \
-  -parakeet /home/toor/experiments/go-parakeet/runtime-assets/parakeet \
-  -kokoro /home/toor/experiments/go-kokoro/tmp/kokoro \
+  -cuda -ort assets/onnxruntime/lib/libonnxruntime.so \
+  -parakeet assets/parakeet -int8 -kokoro assets/kokoro \
   -voice af_heart \
   -wake "hey computer" \
   -barge-in wake \
-  -key /dev/input/by-id/usb-Logitech_G413_Carbon_Mechanical_Gaming_Keyboard_186631473431-event-kbd
+  -key /dev/input/by-id/<your-keyboard>-event-kbd
 ```
 
 `-key` lets the Pause key interrupt even when the terminal isn't focused. It
@@ -92,7 +98,8 @@ When the chime plays, try:
    answers.
 4. "Hey computer, tell me about the history of Rome." Interrupt it with "hey
    computer" or Pause, then ask "what were you just saying?"
-5. "Goodbye" ends the session.
+5. "Hey computer, tell me a short bedtime story."
+6. "Goodbye" ends the session.
 
 Each reply logs a `turn_latency` line:
 
@@ -123,8 +130,8 @@ printf 'what is the capital of France\nand of Spain\n' | go run . -text
 
 | Flag | Env | Default | |
 |---|---|---|---|
-| `-base-url` | `OPENAI_BASE_URL` | `http://orin.runcible.io:11434/v1` | OpenAI-compatible API |
-| `-model` | `OPENAI_API_MODEL` | `qwen3.5:9b` | e.g. `lukey03/qwen3.5-9b-abliterated:latest` |
+| `-base-url` | `OPENAI_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible API |
+| `-model` | `OPENAI_API_MODEL` | `gemma4:e4b` | e.g. `qwen3.5:9b` (see [Models](#models)) |
 | `-api-key` | `OPENAI_API_KEY` | `ollama` | Ollama ignores it |
 | `-reasoning` | | `none` | sent as `reasoning_effort`. `low`, `medium` and `high` turn thinking on (see below) |
 | `-temperature` | | `0.2` | sampling temperature (see [Models](#models)); negative leaves it to the server |
@@ -150,7 +157,7 @@ A skill is a directory in `~/.config/eino-talkie-agent/skills` (or under
 ~/.config/eino-talkie-agent/skills/office-lights/
 ├── SKILL.md
 └── scripts/
-    └── office-lights.sh -> ~/.scripts/office-lights.sh
+    └── office-lights
 ```
 
 `SKILL.md` has YAML front matter with a `name` (letters, digits, `-` and
@@ -161,13 +168,30 @@ has three skills:
 - `web-search` searches the web;
 - `kids-story` tells a children's story of the kind asked for.
 
-To install `office-lights`:
+To install all three:
 
 ```
-mkdir -p ~/.config/eino-talkie-agent/skills/office-lights/scripts
-cp skills/office-lights/SKILL.md ~/.config/eino-talkie-agent/skills/office-lights/
-ln -s ~/.scripts/office-lights.sh ~/.config/eino-talkie-agent/skills/office-lights/scripts/
+mkdir -p ~/.config/eino-talkie-agent/skills
+cp -r skills/* ~/.config/eino-talkie-agent/skills/
 ```
+
+### Office lights
+
+`office-lights` turns a light on or off, makes it warm (3000 K) or cool
+(5400 K), or sets it to half or full brightness, through Home Assistant's
+REST API. Its script,
+[`skills/office-lights/scripts/office-lights`](skills/office-lights/scripts/office-lights),
+is Python with only the standard library. It reads:
+
+| Variable | |
+|---|---|
+| `HASSIO_TOKEN` | a long-lived access token, from your Home Assistant profile's Security tab |
+| `OFFICE_LIGHTS` | the light's entity ID, such as `light.office` (a light group works too) |
+| `HASSIO_API` | Home Assistant's URL; the default is `http://homeassistant.local:8123` |
+
+It exits non-zero, with an `Error:` line, when Home Assistant can't be
+reached, rejects the token or has no such light, so the agent can say it
+didn't work.
 
 ### Web search
 
@@ -211,13 +235,6 @@ The container takes ownership of `settings.yml`. To edit it later, run
 SearXNG (DuckDuckGo sometimes shows a CAPTCHA), but Google's results come
 through.
 
-To install the skill:
-
-```
-mkdir -p ~/.config/eino-talkie-agent/skills
-cp -r skills/web-search ~/.config/eino-talkie-agent/skills/
-```
-
 The skill tells the model to search before answering any question about
 facts in the world, especially anything recent, and not to search for
 chit-chat. Every turn's system prompt includes today's date, so "latest"
@@ -237,12 +254,6 @@ animal, space, or one with a lesson, up to two at once), its length ("short",
 for anything the request leaves open, so stories differ even at temperature
 0.2.
 
-To install it:
-
-```
-cp -r skills/kids-story ~/.config/eino-talkie-agent/skills/
-```
-
 ### How skills work
 
 Before each turn the agent reads the skills, so a new or edited skill applies
@@ -254,9 +265,8 @@ directory, for at most 30 seconds. A skill with one script takes only `args`;
 a skill with several also takes the script's name. The model has no other way
 to run anything.
 
-The scripts inherit the agent's environment. `office-lights.sh` needs
-`HASSIO_TOKEN`, which `~/.bashrc` sets. Note that it exits 0 even when the
-request to Home Assistant fails, so the agent can't tell when it didn't work.
+The scripts inherit the agent's environment, which is how `office-lights`
+gets its token: set the variables in the shell that starts the agent.
 
 A tool error, such as a missing script, goes back to the model as the tool's
 result, so it can tell you what went wrong instead of the turn failing. Each
@@ -283,7 +293,7 @@ prompt.
 
 ## Models
 
-The live tests ran against three models on Ollama on the Orin:
+The live tests ran against three models on Ollama on an NVIDIA Jetson Orin:
 
 | Model | Plain answer, first token | Light request, first word | Skills |
 |---|---|---|---|
@@ -292,7 +302,7 @@ The live tests ran against three models on Ollama on the Orin:
 | `qwen3.5:9b` | 0.4 s | 1.9 to 2.6 s | every request at 0.2 only |
 
 - **`gemma4:e4b`** is the best fit for voice: the fastest, and reliable with
-  skills. Use `-model gemma4:e4b`. Told not to use markdown or code, it wrote
+  skills, and the default. Told not to use markdown or code, it wrote
   its tool calls as text, such as `office-lights{args:["on"]}`, which talkie
   would have spoken. The skills prompt now says that rules about speaking
   don't apply to tool calls, and since then it has made real calls every time.
@@ -300,17 +310,17 @@ The live tests ran against three models on Ollama on the Orin:
   temperature of 1.0, it sometimes skipped the tool and said the lights were
   on anyway. Once that happened, the history taught it to keep doing so for
   the rest of the session. At temperature 0.2 it called the tool for every
-  request in the live test. It needs `-temperature 0.2`, the default.
+  request in the live test. Use `-model qwen3.5:9b`; it needs
+  `-temperature 0.2`, the default.
 - **`gemma4:12b`** called the tool for every request, at both 0.2 and 1.0,
   and started speaking about 0.5 s sooner than qwen after a light request
   (about 1.4 s).
   Use `-model gemma4:12b`. Thinking is on by default in this model, so it
-  needs `-reasoning none` (the default) too. With Ollama's settings on the
-  Orin (a 98,304-token context, 3 parallel slots), the kernel's out-of-memory
-  killer stopped its `llama-server` after about eight turns of one session.
-  The request then failed, and the reload took about 15 s. Freeing memory by
-  stopping another container didn't help: it was killed in three runs out of
-  three, after two turns. A smaller context and one slot
+  needs `-reasoning none` (the default) too. On the Orin, with a
+  98,304-token context and 3 parallel slots, the kernel's out-of-memory
+  killer stopped its `llama-server` after a few turns of one session. The
+  request then failed, and the reload took about 15 s. A smaller context and
+  one slot
   (`OLLAMA_CONTEXT_LENGTH=8192`, `OLLAMA_NUM_PARALLEL=1`, and perhaps
   `OLLAMA_MAX_LOADED_MODELS=1` on the container) should avoid that.
 
@@ -323,15 +333,18 @@ any one model:
 
 ## Room training
 
-Train talkie to the room with talkie-demo:
+Train talkie to the room with talkie-core's demo, once per microphone and
+speaker. It takes about a minute: stay quiet while it measures the room,
+then say the wake word ("hey computer") five times and read a sentence aloud.
 
 ```
-go run github.com/androiddrew/talkie-core/cmd/talkie-demo@v0.1.0 -train -ort ... -kokoro ...
+go run github.com/androiddrew/talkie-core/cmd/talkie-demo@v0.1.0 -train \
+  -ort assets/onnxruntime/lib/libonnxruntime.so -kokoro assets/kokoro
 ```
 
 This example uses the same profile, because profiles are keyed by device
-names in `~/.config/talkie/rooms`. To list the devices, run
-`talkie-demo -list`.
+names in `~/.config/talkie/rooms`. Add `-list` instead of `-train` to list
+the devices, and `-input` and `-output` to pick them.
 
 ## Why thinking is off
 
@@ -376,8 +389,8 @@ was complete about 1 s after the agent was called.
 
 ```
 go vet ./... && go test -race ./...
-EINO_TALKIE_TEST_LLM=http://orin.runcible.io:11434/v1 go test -run Live -v ./...
-EINO_TALKIE_TEST_LLM=... EINO_TALKIE_TEST_THINKING=1 go test -run LiveThinking -v ./...
+EINO_TALKIE_TEST_LLM=http://localhost:11434/v1 go test -run Live -v ./...
+EINO_TALKIE_TEST_LLM=... EINO_TALKIE_TEST_THINKING=1 OPENAI_API_MODEL=qwen3.5:9b go test -run LiveThinking -v ./...
 ```
 
 The unit tests use a fake eino chat model and need neither a network nor ONNX
@@ -387,5 +400,22 @@ repository's office-lights skill with a script that only records its
 arguments, so no real lights change. `TestLiveWebSearch` uses the real
 web-search skill, so it needs SearXNG running. It checks that the model
 searches for facts, doesn't search for chit-chat, and still uses the lights
-skill. Set `OPENAI_API_MODEL` to test another
-model, and `EINO_TALKIE_TEST_TEMP` to test another temperature.
+skill. `TestLiveKidsStory` checks that the model asks for stories of
+different kinds and not for chit-chat. Set `OPENAI_API_MODEL` to test
+another model, and `EINO_TALKIE_TEST_TEMP` to test another temperature.
+
+## Known limits
+
+- Linux only: `-key` reads Linux input events, and skill scripts run in
+  their own process group.
+- The conversation history is kept in memory, for one talkie session at a
+  time.
+- Skill scripts inherit the agent's environment, and the model chooses their
+  arguments. Install only skills you trust.
+- Every skill's instructions are in every turn's prompt, which suits a few
+  short skills.
+
+## License
+
+Apache-2.0; see LICENSE, NOTICE and THIRD_PARTY.md. talkie-core's models have
+their own licenses; see its THIRD_PARTY.md.

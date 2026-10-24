@@ -22,14 +22,14 @@ import (
 )
 
 // liveModel connects to the server in EINO_TALKIE_TEST_LLM, such as
-// http://orin.runcible.io:11434/v1, or skips the test.
+// http://localhost:11434/v1, or skips the test.
 func liveModel(t *testing.T, reasoning string) *watchedModel {
 	t.Helper()
 	baseURL := os.Getenv("EINO_TALKIE_TEST_LLM")
 	if baseURL == "" {
 		t.Skip("set EINO_TALKIE_TEST_LLM to an OpenAI-compatible base URL to run against a real model")
 	}
-	cm, err := newChatModel(context.Background(), baseURL, env("OPENAI_API_MODEL", "qwen3.5:9b"), env("OPENAI_API_KEY", "ollama"), reasoning, liveTemperature(t))
+	cm, err := newChatModel(context.Background(), baseURL, env("OPENAI_API_MODEL", defaultModel), env("OPENAI_API_KEY", "ollama"), reasoning, liveTemperature(t))
 	if err != nil {
 		t.Fatal(err)
 	}

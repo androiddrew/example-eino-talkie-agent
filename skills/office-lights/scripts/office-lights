@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Control a light through Home Assistant's REST API.
+
+Usage: office-lights on|off|morning|day|half|full
+
+  on       turn the light on
+  off      turn it off
+  morning  warm white, 3000 K
+  day      cool daylight, 5400 K
+  half     50% brightness
+  full     100% brightness
+
+Environment:
+  HASSIO_TOKEN   (required) a Home Assistant long-lived access token
+  OFFICE_LIGHTS  (required) the light's entity ID, such as light.office
+  HASSIO_API     Home Assistant's URL (default http://homeassistant.local:8123)
+
+It exits 0 only when Home Assistant accepted the command, so the agent can
+tell the user when it didn't work.
+"""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+COMMANDS = {
+    "on": ("turn_on", {}),
+    "off": ("turn_off", {}),
+    "morning": ("turn_on", {"color_temp_kelvin": 3000}),
+    "day": ("turn_on", {"color_temp_kelvin": 5400}),
+    "half": ("turn_on", {"brightness_pct": 50}),
+    "full": ("turn_on", {"brightness_pct": 100}),
+}
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
+        print(f"Error: the command is one of {', '.join(COMMANDS)}", file=sys.stderr)
+        return 2
+    token = os.environ.get("HASSIO_TOKEN", "")
+    entity = os.environ.get("OFFICE_LIGHTS", "")
+    if not token or not entity:
+        print("Error: set HASSIO_TOKEN and OFFICE_LIGHTS", file=sys.stderr)
+        return 1
+    base = os.environ.get("HASSIO_API", "http://homeassistant.local:8123").rstrip("/")
+    service, data = COMMANDS[sys.argv[1]]
+    try:
+        # Home Assistant accepts a service call for an entity it doesn't
+        # have, so check the entity exists first.
+        request(base, token, "GET", "/api/states/" + urllib.parse.quote(entity))
+        request(base, token, "POST", "/api/services/light/" + service, {"entity_id": entity, **data})
+    except urllib.error.HTTPError as err:
+        if err.code == 404:
+            print(f"Error: Home Assistant has no entity {entity}", file=sys.stderr)
+        else:
+            print(f"Error: Home Assistant answered {err.code} {err.reason}", file=sys.stderr)
+        return 1
+    except (urllib.error.URLError, TimeoutError) as err:
+        print(f"Error: can't reach Home Assistant at {base}: {err}", file=sys.stderr)
+        return 1
+    print(f"{entity}: {sys.argv[1]}")
+    return 0
+
+
+def request(base, token, method, path, body=None):
+    req = urllib.request.Request(
+        base + path,
+        method=method,
+        data=None if body is None else json.dumps(body).encode(),
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

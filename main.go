@@ -33,14 +33,21 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
+// Defaults for the LLM: Ollama on this machine, and the model that measured
+// fastest and most reliable with skills (see the README's Models).
+const (
+	defaultBaseURL = "http://localhost:11434/v1"
+	defaultModel   = "gemma4:e4b"
+)
+
 // voicePrompt is the default system prompt: replies are spoken.
 const voicePrompt = "You are a voice assistant. Your replies are spoken aloud, so answer in one to three short, plain sentences. " +
 	"Never use markdown, lists, headings, code, emoji or URLs. If the user says goodbye, say goodbye briefly."
 
 func main() {
 	var (
-		baseURL     = flag.String("base-url", env("OPENAI_BASE_URL", "http://orin.runcible.io:11434/v1"), "OpenAI-compatible API base URL")
-		modelID     = flag.String("model", env("OPENAI_API_MODEL", "qwen3.5:9b"), "model name")
+		baseURL     = flag.String("base-url", env("OPENAI_BASE_URL", defaultBaseURL), "OpenAI-compatible API base URL")
+		modelID     = flag.String("model", env("OPENAI_API_MODEL", defaultModel), "model name")
 		apiKey      = flag.String("api-key", env("OPENAI_API_KEY", "ollama"), "API key (Ollama ignores it)")
 		reasoning   = flag.String("reasoning", "none", `reasoning effort: "none" turns thinking off; "low", "medium" and "high" are too slow for voice`)
 		temp        = flag.Float64("temperature", 0.2, "sampling temperature; low keeps skill use reliable; negative for the server's default")
@@ -144,7 +151,7 @@ func main() {
 		}
 		defer func() { _ = keys.Close() }()
 		go func() {
-			if err := onPause(keys, t.Interrupt); err != nil && ctx.Err() == nil {
+			if err := onPause(keys, t.Interrupt); ctx.Err() == nil {
 				log.Warn("the Pause key stopped working", "err", err)
 			}
 		}()

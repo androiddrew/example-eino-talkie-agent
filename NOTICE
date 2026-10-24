@@ -1,0 +1,9 @@
+Copyright 2026 Drew Bednar and contributors
+
+Original project code, including the skills and their scripts, is licensed
+under Apache-2.0 (LICENSE).
+
+It uses talkie-core (Apache-2.0), https://github.com/androiddrew/talkie-core,
+for the voice front end, and eino and eino-ext (Apache-2.0, Copyright 2024
+CloudWeGo Authors), https://github.com/cloudwego/eino, for the agent. See
+THIRD_PARTY.md.
