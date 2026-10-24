@@ -314,3 +314,79 @@ func TestLiveWebSearch(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveKidsStory asks a real model for stories of different kinds with the
+// repository's kids-story skill, and the office-lights skill with a recording
+// script.
+func TestLiveKidsStory(t *testing.T) {
+	m := liveModel(t, "none")
+	story, err := filepath.Abs("skills/kids-story/scripts/kids-story")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, s := range []struct{ name, script, body string }{
+		{"kids-story", "kids-story", "#!/bin/sh\necho \"$*\" >> calls\nexec " + story + " \"$@\"\n"},
+		{"office-lights", "office-lights.sh", lightsScript},
+	} {
+		md, err := os.ReadFile(filepath.Join("skills", s.name, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSkill(t, dir, s.name, string(md), map[string]string{s.script: s.body})
+	}
+	runner, err := newRunner(context.Background(), m, voicePrompt, dir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAgent(runner, slog.New(slog.DiscardHandler))
+	calls := func(skill string) string {
+		path := filepath.Join(dir, skill, "calls")
+		b, _ := os.ReadFile(path)
+		_ = os.Remove(path)
+		return strings.TrimSpace(string(b))
+	}
+	for i, c := range []struct {
+		say    string
+		story  string // a word the story request must contain, or "" for no story
+		lights string // the lights script's expected arguments
+	}{
+		{say: "Tell me a funny story about a pirate cat.", story: "pirate"},
+		{say: "Can you tell Mia a short bedtime story?", story: "bedtime"},
+		{say: "Tell me a story about sharing for a five year old.", story: "shar"},
+		{say: "Tell me a spooky story about a ghost.", story: "ghost"},
+		{say: "How are you doing today?"},
+		{say: "Turn the lights on.", lights: "on"},
+	} {
+		var timing agentTiming
+		a.timed = func(t agentTiming) { timing = t }
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		out := &recorder{ctx: ctx}
+		err := a.respond(ctx, talkie.Turn{Session: fmt.Sprint("story_", i), Text: c.say}, out)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		requests := calls("kids-story")
+		t.Logf("%q -> %q (requested %q, first_token=%v total=%v)", c.say, out.text(), requests,
+			sinceOrZero(timing.Respond, timing.FirstToken), timing.Done.Sub(timing.Respond).Round(time.Millisecond))
+		if c.story == "" {
+			if requests != "" {
+				t.Errorf("%q: requested a story %q", c.say, requests)
+			}
+		} else {
+			if !strings.Contains(strings.ToLower(requests), c.story) {
+				t.Errorf("%q: requested a story %q, want one with %q", c.say, requests, c.story)
+			}
+			if n := strings.Count(out.text(), ". "); n < 6 {
+				t.Errorf("%q: the story has only about %d sentences", c.say, n+1)
+			}
+			if strings.ContainsAny(out.text(), "*#") {
+				t.Errorf("%q: the story has markdown", c.say)
+			}
+		}
+		if got := calls("office-lights"); got != c.lights {
+			t.Errorf("%q: the lights script got %q, want %q", c.say, got, c.lights)
+		}
+	}
+}

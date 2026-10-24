@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Print a brief for a children's story of the kind asked for, for a model to tell.
+
+Usage: kids-story <the request in a few words...>
+
+The words pick the kind of story (bedtime, funny, adventure, spooky, fairy
+tale, animal, space, or one with a lesson) and its length. Random story
+seeds fill in whatever the request leaves open, so stories differ even at a
+low sampling temperature.
+"""
+
+import random
+import re
+import sys
+
+# Kinds in priority order: a request matching several gets the first two.
+KINDS = [
+    ("bedtime", r"bed ?time|sleep|night|tired|calm|quiet|lullaby|dream",
+     "A bedtime story. Keep it soft, slow and cozy, with almost no conflict. "
+     "Repeat a gentle phrase a few times. Let the story wind down as it goes, "
+     "and end with the hero safe, warm and falling asleep."),
+    ("funny", r"funny|silly|laugh|joke|goofy|giggle|hilarious|crazy|wacky",
+     "A funny story. Use silly situations, funny sounds and words to say out "
+     "loud, and a running gag that happens three times and gets bigger each "
+     "time. End with a surprise that pays off the gag."),
+    ("spooky", r"spooky|scary|ghost|monster|halloween|witch|haunted|vampire|skeleton|creepy",
+     "A gently spooky story. Build a little shivery suspense, then reveal "
+     "that the scary thing is friendly, silly or just misunderstood. Nothing "
+     "gory or truly frightening, and end cozy and safe."),
+    ("adventure", r"adventure|quest|treasure|pirate|explor|journey|brave|hero|knight|jungle|ocean|map",
+     "An adventure story. Give the hero a clear goal, three obstacles that "
+     "each need courage or cleverness, a moment where things look hard, and "
+     "a triumphant return home."),
+    ("fairy tale", r"fairy|princess|prince|castle|king|queen|magic|wizard|dragon|unicorn|mermaid|enchanted|spell",
+     "A fairy tale. Begin with \"Once upon a time\", use magic and things "
+     "that come in threes, reward kindness, and end with \"happily ever after\"."),
+    ("animal", r"animal|dog|pupp|cat|kitten|bunn|rabbit|bear|fox|owl|mouse|elephant|lion|duck|frog|horse|pig|dinosaur|turtle|penguin|monkey|farm|zoo",
+     "An animal story. The animals talk and have big feelings, but act true "
+     "to their nature: what they eat, where they live and how they move."),
+    ("space", r"space|rocket|planet|star|robot|alien|moon|astronaut|galaxy|science|invent",
+     "A story of wonder and discovery. Weave in one real, simple science fact "
+     "the child can remember."),
+    ("lesson", r"lesson|moral|shar|kind|friend|feeling|afraid|scared of|nervous|first day|school|patien|honest|sorry|new baby|potty|brush",
+     "A story with a lesson. The hero faces the problem the child asked "
+     "about and learns from it by what happens, not by being lectured. End "
+     "with one short sentence that says the lesson."),
+]
+
+DEFAULT = ("classic",
+           "A classic story with a clear beginning, middle and end. The hero "
+           "has a small problem and solves it with kindness and cleverness.")
+
+HEROES = [
+    "Pip, a tiny mouse with big ideas", "Juniper, a curious young fox",
+    "Captain Biscuit, a brave little dog", "Mabel, a girl who collects buttons",
+    "Theo, a boy who can whistle any song", "Gus, a grumpy but kind old bear",
+    "Luna, an owl who is afraid of the dark", "Ziggy, a robot who loves to dance",
+    "Rosie, a hen who wants to fly", "Ollie, an octopus who loses his socks",
+    "Nell, a girl with a very loud sneeze", "Bramble, a hedgehog who gives hugs",
+]
+PLACES = [
+    "a village at the top of a hill", "a lighthouse by the sea",
+    "a garden where the vegetables are enormous", "a cloud city in the sky",
+    "a busy forest by a crooked river", "a little house at the end of a long road",
+    "a snowy mountain", "an island shaped like a teacup",
+    "a library where the books whisper", "the bottom of a quiet pond",
+]
+THINGS = [
+    "a red umbrella", "a map with one corner missing", "a jar of moonlight",
+    "a squeaky trumpet", "a golden acorn", "a kite that tugs back",
+    "a pair of wobbly boots", "a lost balloon", "a magic paintbrush",
+    "a shell that hums",
+]
+
+
+def main():
+    request = " ".join(sys.argv[1:]).strip()
+    words = request.lower()
+    kinds = [(name, guide) for name, pattern, guide in KINDS if re.search(pattern, words)][:2] or [DEFAULT]
+
+    sentences = "about 15 to 20"
+    if re.search(r"short|quick|brief", words):
+        sentences = "about 8 to 10"
+    elif re.search(r"long|epic", words):
+        sentences = "about 30 to 40"
+    age = re.search(r"(\d+)[ -]?(?:year|yr)", words)
+    audience = f"a {age.group(1)}-year-old" if age else "a child of about 4 to 8"
+
+    lines = [
+        f"Story brief for {request!r}:" if request else "Story brief:",
+        "Kind: " + " and ".join(name for name, _ in kinds) + ".",
+        *(guide for _, guide in kinds),
+        "Use what the request asks for: its characters, places and subject come first. "
+        "If it names the child, or asks for them to be in the story, make them the hero.",
+        "Ideas for anything the request leaves open, to use or ignore:",
+        f"- hero: {random.choice(HEROES)}",
+        f"- place: {random.choice(PLACES)}",
+        f"- something special: {random.choice(THINGS)}",
+        f"Tell it for {audience}, in {sentences} sentences. It is spoken aloud: "
+        "use short sentences and simple, vivid words, and say who speaks. "
+        "No title, headings, lists, markdown, emoji or sound effects in asterisks.",
+        "Keep it gentle and kind: no violence, no one gets hurt, nothing truly sad.",
+        "Start the story straight away, tell all of it, and finish with \"The end.\" "
+        "Don't ask a question after it.",
+    ]
+    print("\n".join(lines))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

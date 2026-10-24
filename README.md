@@ -156,9 +156,10 @@ A skill is a directory in `~/.config/eino-talkie-agent/skills` (or under
 `SKILL.md` has YAML front matter with a `name` (letters, digits, `-` and
 `_`; it defaults to the directory's name) and a `description`, then
 instructions for the model. The repository's [`skills`](skills) directory
-has two skills:
+has three skills:
 - `office-lights` controls the office lights;
-- `web-search` searches the web.
+- `web-search` searches the web;
+- `kids-story` tells a children's story of the kind asked for.
 
 To install `office-lights`:
 
@@ -223,6 +224,24 @@ chit-chat. Every turn's system prompt includes today's date, so "latest"
 and "today" mean something. With `gemma4:e4b`, a searched answer starts
 speaking about 2 s after the question, against about 0.3 s for an answer from
 memory.
+
+### Kids' stories
+
+`kids-story` tells a children's story. The model calls it with the request
+in a few words, such as `["short bedtime story for Mia"]`, and its script,
+[`skills/kids-story/scripts/kids-story`](skills/kids-story/scripts/kids-story),
+prints a brief for the model to tell the story from. The request's words
+pick the kind of story (bedtime, funny, spooky, adventure, fairy tale,
+animal, space, or one with a lesson, up to two at once), its length ("short",
+"long") and the child's age. The brief adds a random hero, place and object
+for anything the request leaves open, so stories differ even at temperature
+0.2.
+
+To install it:
+
+```
+cp -r skills/kids-story ~/.config/eino-talkie-agent/skills/
+```
 
 ### How skills work
 
