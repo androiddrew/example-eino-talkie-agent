@@ -1,7 +1,7 @@
 # example-eino-talkie-agent
 
 Talk with an [eino](https://github.com/cloudwego/eino) agent through
-[talkie-core](../talkie-core). Say the wake word and ask something. talkie
+[talkie-core](https://github.com/androiddrew/talkie-core). Say the wake word and ask something. talkie
 transcribes it, an eino `ChatModelAgent` answers through an OpenAI-compatible
 LLM (Ollama by default), and talkie speaks the answer a sentence at a time as
 it streams in. You can interrupt it, and on the next turn the agent knows how
@@ -19,8 +19,7 @@ agent framework.
 ## Prerequisites
 
 - **Go 1.25** and a C toolchain (talkie-core uses CGO).
-- **talkie-core** checked out next to this directory. It isn't published yet,
-  so `go.mod` replaces it with `../talkie-core`.
+- **talkie-core** v0.1.0, which `go` downloads.
 - **ONNX Runtime 1.22**. Use a CUDA build for `-cuda`.
 - **Models.** You need Parakeet TDT 0.6B v3 (`nemo128.onnx`,
   `encoder-model.onnx` with its `.onnx.data`, `decoder_joint-model.onnx`) and
@@ -63,7 +62,7 @@ Before you start, check:
 - **The skills** are installed: `ls ~/.config/eino-talkie-agent/skills`
   lists `office-lights` and `web-search`
 - **The room** is trained, which only needs doing once per room and devices:
-  `cd ../talkie-core && go run ./cmd/talkie-demo -train -ort ... -kokoro ...`
+  `go run github.com/androiddrew/talkie-core/cmd/talkie-demo@v0.1.0 -train -ort ... -kokoro ...`
 
 Then launch:
 
@@ -308,7 +307,7 @@ any one model:
 Train talkie to the room with talkie-demo:
 
 ```
-cd ../talkie-core && go run ./cmd/talkie-demo -train -ort ... -kokoro ...
+go run github.com/androiddrew/talkie-core/cmd/talkie-demo@v0.1.0 -train -ort ... -kokoro ...
 ```
 
 This example uses the same profile, because profiles are keyed by device
