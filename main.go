@@ -3,8 +3,13 @@
 // loud, a sentence at a time as it streams in. Interrupt it and its next turn
 // knows how much of the reply you heard.
 //
-//	go run . -cuda -ort /path/to/libonnxruntime.so \
-//	    -parakeet /path/to/parakeet -kokoro /path/to/kokoro
+//	go install github.com/androiddrew/example-eino-talkie-agent@latest
+//	example-eino-talkie-agent -install-skills
+//	example-eino-talkie-agent
+//
+// It finds ONNX Runtime and the models in its data directory, settings in
+// config.yaml and skills in its config directory, following the XDG Base
+// Directory spec (see config.go); flags override each.
 //
 // -text runs the same agent without audio: each line of stdin is a turn,
 // and the reply is printed as it would be spoken.
@@ -46,20 +51,23 @@ const voicePrompt = "You are a voice assistant. Your replies are spoken aloud, s
 
 func main() {
 	var (
-		baseURL     = flag.String("base-url", env("OPENAI_BASE_URL", defaultBaseURL), "OpenAI-compatible API base URL")
-		modelID     = flag.String("model", env("OPENAI_API_MODEL", defaultModel), "model name")
-		apiKey      = flag.String("api-key", env("OPENAI_API_KEY", "ollama"), "API key (Ollama ignores it)")
-		reasoning   = flag.String("reasoning", "none", `reasoning effort: "none" turns thinking off; "low", "medium" and "high" are too slow for voice`)
-		temp        = flag.Float64("temperature", 0.2, "sampling temperature; low keeps skill use reliable; negative for the server's default")
-		instruction = flag.String("instruction", voicePrompt, "system prompt")
-		textMode    = flag.Bool("text", false, "no audio: read turns from stdin and print the replies")
-		skillsDir   = flag.String("skills", defaultSkillsDir(), `directory of skills, each a directory with a SKILL.md; "" for none`)
+		configFile   = flag.String("config", env("EINO_TALKIE_CONFIG", defaultConfigFile()), "settings file: flag names as YAML keys")
+		data         = flag.String("data", env("EINO_TALKIE_DATA", dataDir()), "directory with ONNX Runtime and the models, as talkie-core's get-assets.sh -d writes them")
+		installSkill = flag.Bool("install-skills", false, "install the bundled skills into -skills, keeping any already there, and exit")
+		baseURL      = flag.String("base-url", env("OPENAI_BASE_URL", defaultBaseURL), "OpenAI-compatible API base URL")
+		modelID      = flag.String("model", env("OPENAI_API_MODEL", defaultModel), "model name")
+		apiKey       = flag.String("api-key", env("OPENAI_API_KEY", "ollama"), "API key (Ollama ignores it)")
+		reasoning    = flag.String("reasoning", "none", `reasoning effort: "none" turns thinking off; "low", "medium" and "high" are too slow for voice`)
+		temp         = flag.Float64("temperature", 0.2, "sampling temperature; low keeps skill use reliable; negative for the server's default")
+		instruction  = flag.String("instruction", voicePrompt, "system prompt")
+		textMode     = flag.Bool("text", false, "no audio: read turns from stdin and print the replies")
+		skillsDir    = flag.String("skills", defaultSkillsDir(), `directory of skills, each a directory with a SKILL.md; "" for none`)
 
-		ort      = flag.String("ort", os.Getenv("TALKIE_ORT"), "ONNX Runtime library, a path or loader name")
+		ort      = flag.String("ort", os.Getenv("TALKIE_ORT"), "ONNX Runtime library, a path or loader name (default: in -data, else libonnxruntime.so)")
 		cuda     = flag.Bool("cuda", false, "run speech-to-text and text-to-speech on the GPU")
-		parakeet = flag.String("parakeet", "", "directory with the Parakeet TDT 0.6B v3 ONNX files")
-		int8     = flag.Bool("int8", false, "use Parakeet's INT8 files, faster on CPU")
-		kokoro   = flag.String("kokoro", "", "directory with kokoro-v1.0.onnx and voices-v1.0.bin")
+		parakeet = flag.String("parakeet", "", "directory with the Parakeet TDT 0.6B v3 ONNX files (default: parakeet in -data)")
+		int8     = flag.Bool("int8", false, "use Parakeet's INT8 files, faster on CPU; the default when the FP32 files aren't there")
+		kokoro   = flag.String("kokoro", "", "directory with kokoro-v1.0.onnx and voices-v1.0.bin (default: kokoro in -data)")
 		voice    = flag.String("voice", "af_heart", "Kokoro voice")
 		wake     = flag.String("wake", "hey computer", `wake word; "" to use Enter only`)
 		input    = flag.String("input", "", "microphone: part of its name; default device if empty")
@@ -72,6 +80,28 @@ func main() {
 		verbose  = flag.Bool("v", false, "log every state change")
 	)
 	flag.Parse()
+	explicit := false
+	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "config" })
+	if err := expandHome(flag.CommandLine); err != nil {
+		fail(err)
+	}
+	if *configFile != "" {
+		if err := applyConfig(flag.CommandLine, *configFile, explicit || os.Getenv("EINO_TALKIE_CONFIG") != ""); err != nil {
+			fail(err)
+		}
+	}
+	if err := expandHome(flag.CommandLine); err != nil {
+		fail(err)
+	}
+	if *installSkill {
+		if *skillsDir == "" {
+			fail(fmt.Errorf("-install-skills needs -skills"))
+		}
+		if err := installSkills(*skillsDir, os.Stdout); err != nil {
+			fail(err)
+		}
+		return
+	}
 	level := slog.LevelInfo
 	if *verbose {
 		level = slog.LevelDebug
@@ -83,6 +113,9 @@ func main() {
 	cm, err := newChatModel(ctx, *baseURL, *modelID, *apiKey, *reasoning, *temp)
 	if err != nil {
 		fail(err)
+	}
+	if *skillsDir != "" && !exists(*skillsDir) {
+		log.Info("no skills yet: run with -install-skills to install the bundled ones", "dir", *skillsDir)
 	}
 	runner, err := newRunner(ctx, cm, *instruction, *skillsDir, log)
 	if err != nil {
@@ -102,9 +135,11 @@ func main() {
 		return
 	}
 
-	if *ort == "" || *parakeet == "" || *kokoro == "" {
-		fail(fmt.Errorf("-ort, -parakeet and -kokoro are required, or use -text (see -h)"))
+	a, err := resolveAssets(*data, assets{ORT: *ort, Parakeet: *parakeet, Kokoro: *kokoro, INT8: *int8})
+	if err != nil {
+		fail(fmt.Errorf("%w; or use -text", err))
 	}
+	log.Info("models", "ort", a.ORT, "parakeet", a.Parakeet, "int8", a.INT8, "kokoro", a.Kokoro)
 	bargeIn, ok := map[string]talkie.BargeIn{"voice": talkie.BargeInVoice, "wake": talkie.BargeInWakeWord, "off": talkie.BargeInOff}[*barge]
 	if !ok {
 		fail(fmt.Errorf(`-barge-in is "voice", "wake" or "off", not %q`, *barge))
@@ -115,12 +150,12 @@ func main() {
 
 	log.Info("loading models")
 	t, err := talkie.New(ctx, talkie.Config{
-		ORTLibrary: *ort,
+		ORTLibrary: a.ORT,
 		CUDA:       *cuda,
-		Parakeet:   talkie.ParakeetConfig{Dir: *parakeet, INT8: *int8},
+		Parakeet:   talkie.ParakeetConfig{Dir: a.Parakeet, INT8: a.INT8},
 		Kokoro: talkie.KokoroConfig{
-			ModelPath:  filepath.Join(*kokoro, "kokoro-v1.0.onnx"),
-			VoicesPath: filepath.Join(*kokoro, "voices-v1.0.bin"),
+			ModelPath:  filepath.Join(a.Kokoro, "kokoro-v1.0.onnx"),
+			VoicesPath: filepath.Join(a.Kokoro, "voices-v1.0.bin"),
 			Voice:      *voice,
 		},
 		WakeWord:                *wake,

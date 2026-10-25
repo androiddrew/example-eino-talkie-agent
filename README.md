@@ -17,31 +17,39 @@ It is an example, and a test of talkie-core's public API (`talkie.New`,
 `Agent`, `Turn`, `Reply`, `Interruption`, `Run`, `Config.OnEvent`) with a real
 agent framework.
 
-## Prerequisites
+## Install
 
-- **Linux**, **Go 1.25** and a C toolchain (talkie-core uses CGO), with a
-  microphone and a speaker.
-- **ONNX Runtime 1.22, Parakeet TDT 0.6B v3 and Kokoro v1.0.** talkie-core's
-  `get-assets.sh` downloads them into `./assets`, each file pinned and checked
-  against its SHA256 (about 1 GB):
-  ```
-  curl -fsSL https://raw.githubusercontent.com/androiddrew/talkie-core/v0.1.0/scripts/get-assets.sh | bash
-  ```
-  Add `-s -- --cuda` after `bash` for the GPU build, which needs CUDA 12 and
-  cuDNN 9. The wake word and VAD models are embedded in their Go modules.
-- **An OpenAI-compatible LLM server.** The default is Ollama at
-  `http://localhost:11434/v1` with `gemma4:e4b` (`ollama pull gemma4:e4b`).
+You need **Linux**, **Go 1.25** and a C toolchain such as gcc (talkie-core
+uses CGO), a microphone and a speaker, and an **OpenAI-compatible LLM
+server**. The default is Ollama at `http://localhost:11434/v1` with
+`gemma4:e4b` (`ollama pull gemma4:e4b`).
 
-## Run it
+1. **Install the agent and its skills:**
+   ```
+   go install github.com/androiddrew/example-eino-talkie-agent@latest
+   example-eino-talkie-agent -install-skills
+   ```
+   `-install-skills` writes the bundled skills into
+   `~/.config/eino-talkie-agent/skills` and keeps any already there.
+2. **Download ONNX Runtime 1.22, Parakeet TDT 0.6B v3 and Kokoro v1.0** into
+   the agent's data directory with talkie-core's `get-assets.sh`. Each file
+   is pinned and checked against its SHA256 (about 1 GB):
+   ```
+   curl -fsSL https://raw.githubusercontent.com/androiddrew/talkie-core/v0.1.0/scripts/get-assets.sh \
+     | bash -s -- -d ~/.local/share/eino-talkie-agent
+   ```
+   Add `--cuda` after `-d DIR` for the GPU build of ONNX Runtime, which needs
+   CUDA 12 and cuDNN 9. To keep the models elsewhere, such as `/data`, give
+   that directory to `-d` and to the agent (see
+   [Files and directories](#files-and-directories)). The wake word and VAD
+   models are embedded in their Go modules.
+3. **Train talkie to the room** once (see [Room training](#room-training)).
+4. **Talk to it:**
+   ```
+   example-eino-talkie-agent        # add -cuda with the GPU build
+   ```
 
-Train talkie to the room once (see [Room training](#room-training)), then:
-
-```
-go run . -ort assets/onnxruntime/lib/libonnxruntime.so \
-  -parakeet assets/parakeet -int8 -kokoro assets/kokoro
-```
-
-Add `-cuda` if you downloaded the GPU build.
+From a clone, `go run .` runs the same program.
 
 At start-up it asks the model for one token, so Ollama loads the model before
 your first question. Then talkie loads its models and plays the ready chime.
@@ -75,14 +83,16 @@ Before you start, check:
 Then launch:
 
 ```
-go run . \
-  -cuda -ort assets/onnxruntime/lib/libonnxruntime.so \
-  -parakeet assets/parakeet -int8 -kokoro assets/kokoro \
+example-eino-talkie-agent \
+  -cuda \
   -voice af_heart \
   -wake "hey computer" \
   -barge-in wake \
   -key /dev/input/by-id/<your-keyboard>-event-kbd
 ```
+
+The same settings can go in `config.yaml` instead (see
+[Files and directories](#files-and-directories)).
 
 `-key` lets the Pause key interrupt even when the terminal isn't focused. It
 needs read access to the keyboard: run `sudo usermod -aG input $USER` and log
@@ -123,13 +133,51 @@ stdin is a turn in one session, and the reply is printed as it would be
 spoken:
 
 ```
-printf 'what is the capital of France\nand of Spain\n' | go run . -text
+printf 'what is the capital of France\nand of Spain\n' | example-eino-talkie-agent -text
 ```
+
+## Files and directories
+
+The agent follows the [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/)
+spec:
+
+| What | Default | Override |
+|---|---|---|
+| Settings | `$XDG_CONFIG_HOME/eino-talkie-agent/config.yaml` | `-config`, `EINO_TALKIE_CONFIG` |
+| Skills | `$XDG_CONFIG_HOME/eino-talkie-agent/skills/` | `-skills` |
+| ONNX Runtime and the models | `$XDG_DATA_HOME/eino-talkie-agent/` | `-data`, `EINO_TALKIE_DATA` |
+| Room profiles (talkie-core's) | `$XDG_CONFIG_HOME/talkie/rooms/` | |
+
+`$XDG_CONFIG_HOME` defaults to `~/.config` and `$XDG_DATA_HOME` to
+`~/.local/share`. The data directory has the layout `get-assets.sh -d`
+writes: `onnxruntime/lib/libonnxruntime.so`, `parakeet/` and `kokoro/`.
+`-ort`, `-parakeet` and `-kokoro` override each part. Without
+`onnxruntime/` there, the agent loads `libonnxruntime.so` through the system's
+loader, for an ONNX Runtime installed system-wide. Parakeet's INT8 files are
+used when its FP32 files aren't there, as after a default `get-assets.sh`.
+
+`config.yaml` sets any flag, with the flag's name as the key:
+
+```yaml
+data: /data/talkie         # the models live here on this machine
+model: gemma4:e4b
+base-url: http://gpu-box:11434/v1
+cuda: true
+barge-in: wake
+key: /dev/input/by-id/usb-My_Keyboard-event-kbd
+```
+
+A setting comes from, in order: its flag, its environment variable,
+`config.yaml`, then its default. Paths may start with `~/`. An unknown key is
+an error, so a misspelled setting doesn't go unnoticed.
 
 ## Flags
 
 | Flag | Env | Default | |
 |---|---|---|---|
+| `-config` | `EINO_TALKIE_CONFIG` | `$XDG_CONFIG_HOME/eino-talkie-agent/config.yaml` | the settings file; a missing default one is fine |
+| `-data` | `EINO_TALKIE_DATA` | `$XDG_DATA_HOME/eino-talkie-agent` | ONNX Runtime and the models |
+| `-install-skills` | | | install the bundled skills into `-skills`, keeping any there, and exit |
 | `-base-url` | `OPENAI_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible API |
 | `-model` | `OPENAI_API_MODEL` | `gemma4:e4b` | e.g. `qwen3.5:9b` (see [Models](#models)) |
 | `-api-key` | `OPENAI_API_KEY` | `ollama` | Ollama ignores it |
@@ -140,7 +188,8 @@ printf 'what is the capital of France\nand of Spain\n' | go run . -text
 | `-text` | | off | no audio: stdin turns, printed replies |
 
 The talkie flags are the same as `talkie-demo`'s: `-ort` (or `TALKIE_ORT`),
-`-cuda`, `-parakeet`, `-int8`, `-kokoro`, `-voice`, `-wake` (default "hey
+`-cuda`, `-parakeet`, `-int8`, `-kokoro` (these three default to the data
+directory), `-voice`, `-wake` (default "hey
 computer"), `-input`, `-output`, `-no-echo-cancel`, `-barge-in` (default
 `wake`, so only the wake word interrupts by voice; `voice` also lets you talk
 over the agent, and `off` leaves only Enter or Pause), `-key`, `-no-chime`,
@@ -168,12 +217,11 @@ has three skills:
 - `web-search` searches the web;
 - `kids-story` tells a children's story of the kind asked for.
 
-To install all three:
-
-```
-mkdir -p ~/.config/eino-talkie-agent/skills
-cp -r skills/* ~/.config/eino-talkie-agent/skills/
-```
+`example-eino-talkie-agent -install-skills` installs all three. It keeps a
+skill that is already there, so your edits survive; delete a skill's
+directory and run it again to get the bundled version back. The scripts must
+be executable, which `-install-skills` takes care of; copying them out of Go's
+module cache doesn't, since Go stores its files read-only and not executable.
 
 ### Office lights
 
@@ -338,8 +386,9 @@ speaker. It takes about a minute: stay quiet while it measures the room,
 then say the wake word ("hey computer") five times and read a sentence aloud.
 
 ```
+data=~/.local/share/eino-talkie-agent
 go run github.com/androiddrew/talkie-core/cmd/talkie-demo@v0.1.0 -train \
-  -ort assets/onnxruntime/lib/libonnxruntime.so -kokoro assets/kokoro
+  -ort $data/onnxruntime/lib/libonnxruntime.so -kokoro $data/kokoro
 ```
 
 This example uses the same profile, because profiles are keyed by device
@@ -380,7 +429,10 @@ was complete about 1 s after the agent was called.
   letter by letter), fenced code, list numbers at the start of a line (talkie
   would speak "1." as a sentence) and `<think>` blocks.
 - `skills.go` reads the skills, builds the system prompt and the tool for
-  each skill, and turns tool errors into results.
+  each skill, and turns tool errors into results. `install.go` writes the
+  skills embedded in the binary for `-install-skills`.
+- `config.go` finds the XDG directories, applies `config.yaml` to the flags
+  and finds the models in the data directory.
 - `latency.go` joins talkie's events from `Config.OnEvent` with the agent's
   timings over a buffered channel. OnEvent never blocks: when the channel is
   full, the record is dropped and counted.

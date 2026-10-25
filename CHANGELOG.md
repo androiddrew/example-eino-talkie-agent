@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-10-24
+## [0.1.0] - 2026-10-25
 
 ### Added
 
@@ -10,6 +10,10 @@
   - the model's reply streams into talkie a sentence at a time, filtered for speech (URLs, code, list numbers and `<think>` blocks);
   - an interruption cancels the model's request, and the next turn's history holds only what the user heard;
   - thinking is off by default (`-reasoning none`), since it delays the first word by about a minute.
+- `go install`-able, following the XDG Base Directory spec:
+  - settings in `$XDG_CONFIG_HOME/eino-talkie-agent/config.yaml` (`-config`), whose keys are the flag names; a flag, then its environment variable, then the file, then the default;
+  - ONNX Runtime and the models in `$XDG_DATA_HOME/eino-talkie-agent` (`-data`), laid out as talkie-core's `get-assets.sh -d` writes them, with `-ort`, `-parakeet` and `-kokoro` overriding each part; Parakeet INT8 when its FP32 files aren't there;
+  - `-install-skills` writes the bundled skills, with executable scripts, keeping any already installed.
 - Skills in the Agent Skills format, from `$XDG_CONFIG_HOME/eino-talkie-agent/skills` or `-skills`:
   - their instructions go in the system prompt, and each skill is a tool that runs its scripts without a shell, for at most 30 s;
   - they are read before each turn, so a new or edited skill applies without a restart;

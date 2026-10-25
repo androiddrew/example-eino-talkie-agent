@@ -38,16 +38,6 @@ import (
 // skill, it said it had done the task without running the script. Skills
 // for a voice assistant are few and short, so they are all in the prompt.
 
-// defaultSkillsDir is $XDG_CONFIG_HOME/eino-talkie-agent/skills, or
-// ~/.config/eino-talkie-agent/skills.
-func defaultSkillsDir() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, "eino-talkie-agent", "skills")
-}
-
 const skillFile = "SKILL.md"
 
 // agentSkill is a skill read from its directory.
@@ -77,6 +67,9 @@ func (d skillDir) load() ([]agentSkill, error) {
 	var skills []agentSkill
 	seen := map[string]bool{}
 	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") { // hidden, or an install in progress
+			continue
+		}
 		dir := filepath.Join(d.dir, e.Name())
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			continue
