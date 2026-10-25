@@ -1,0 +1,15 @@
+# Sound through ALSA instead of a sound server, as on a headless Jetson: add
+# :docker/compose.alsa.yaml to COMPOSE_FILE in .env. ALSA can't open a device
+# that a sound server is using. TALKIE_AUDIO_GID is the host's audio group:
+# getent group audio | cut -d: -f3.
+services:
+  agent:
+    environment: !reset {}
+    volumes: !override
+      - ${HOME}/.config/eino-talkie-agent:/config/eino-talkie-agent
+      - ${HOME}/.config/talkie:/config/talkie
+      - ${TALKIE_DATA:-${HOME}/.local/share/eino-talkie-agent}:/data/eino-talkie-agent
+    devices:
+      - /dev/snd
+    group_add:
+      - "${TALKIE_AUDIO_GID:-29}"

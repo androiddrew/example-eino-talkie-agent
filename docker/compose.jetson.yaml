@@ -1,0 +1,8 @@
+# A Jetson image on the Jetson's GPU: COMPOSE_FILE=compose.yaml:docker/compose.jetson.yaml
+# in .env, with TALKIE_JETSON=jetson-xavier (the default) or jetson-orin.
+services:
+  agent:
+    image: ${TALKIE_IMAGE:-eino-talkie-agent:${TALKIE_JETSON:-jetson-xavier}}
+    build:
+      dockerfile: docker/${TALKIE_JETSON:-jetson-xavier}/Dockerfile
+    runtime: nvidia

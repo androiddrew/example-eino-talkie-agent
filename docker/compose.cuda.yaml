@@ -1,0 +1,14 @@
+# The CUDA image on an NVIDIA GPU: COMPOSE_FILE=compose.yaml:docker/compose.cuda.yaml
+# in .env. It needs the NVIDIA Container Toolkit.
+services:
+  agent:
+    image: ${TALKIE_IMAGE:-eino-talkie-agent:cuda}
+    build:
+      dockerfile: docker/Dockerfile.cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

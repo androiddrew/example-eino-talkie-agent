@@ -4,8 +4,8 @@
 # on the ONNX Runtime base image from kokoro-run
 # (github.com/androiddrew/kokoro-run, docker/jetson-xavier/Dockerfile.onnxruntime):
 # CUDA 12.2 through cuda-compat, cuDNN 9.3 and ONNX Runtime 1.22.2 compiled for
-# the Xavier's sm_72, Ubuntu 22.04. Build that once on the Xavier (many
-# hours), then this, on the Xavier too:
+# the Xavier's sm_72, Ubuntu 22.04. It is published on Docker Hub as
+# androiddrew/onnxruntime-jetson-xavier, so only this builds, on the Xavier:
 #
 #   make image-jetson-xavier
 #   docker run --runtime nvidia ... eino-talkie-agent:jetson-xavier
@@ -14,7 +14,7 @@
 #   ORT_VERSION  the ONNX Runtime version in it
 #   Mounts and VERSION: as in ../Dockerfile.cpu
 
-ARG ORT_IMAGE=onnxruntime-jetson-xavier:1.22.2-cuda12.2
+ARG ORT_IMAGE=androiddrew/onnxruntime-jetson-xavier:1.22.2-cuda-12.2-cudnn-9.3
 
 # Built on Ubuntu 22.04, the runtime's own release: Go's Debian 12 images have
 # a newer glibc than it. Go 1.26: bytedance/sonic, which eino uses for JSON,

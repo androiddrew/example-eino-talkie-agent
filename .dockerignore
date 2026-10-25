@@ -6,3 +6,4 @@ example-eino-talkie-agent
 *.bin
 *.wav
 __pycache__
+.env

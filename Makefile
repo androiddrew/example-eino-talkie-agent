@@ -32,10 +32,10 @@ image-cuda:
 	docker buildx build --platform linux/amd64 -f docker/Dockerfile.cuda $(BUILD_ARGS) --load -t $(IMAGE):cuda .
 
 # The Jetson images build on the Jetson, on kokoro-run's ONNX Runtime base
-# images: there, run `make image-jetson-orin-onnxruntime` or
-# `make image-jetson-xavier-onnxruntime` once (hours) first.
+# images. The Xavier's is on Docker Hub; for the Orin's, run
+# `make image-jetson-orin-onnxruntime` in kokoro-run once (hours) first.
 JETSON_ORIN_ORT_IMAGE ?= onnxruntime-jetson-orin:1.23.0-cuda13.2
-JETSON_XAVIER_ORT_IMAGE ?= onnxruntime-jetson-xavier:1.22.2-cuda12.2
+JETSON_XAVIER_ORT_IMAGE ?= androiddrew/onnxruntime-jetson-xavier:1.22.2-cuda-12.2-cudnn-9.3
 
 image-jetson-orin:
 	docker buildx build --platform linux/arm64 -f docker/jetson-orin/Dockerfile $(BUILD_ARGS) \

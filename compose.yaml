@@ -1,0 +1,67 @@
+# The agent and the SearXNG its web-search skill uses. See the README's "Run
+# it in Docker". Copy .env.example to .env first, and set SEARXNG_SECRET; for
+# a GPU, .env's COMPOSE_FILE adds docker/compose.cuda.yaml or
+# docker/compose.jetson.yaml.
+#
+#   docker compose run --rm agent -install-skills
+#   docker compose run --rm agent -train
+#   docker compose up -d
+#
+# The settings, skills, room profiles and models stay on the host; the
+# directories must exist (see the README).
+
+name: eino-talkie-agent
+
+services:
+  agent:
+    image: ${TALKIE_IMAGE:-eino-talkie-agent:cpu}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    # As you, so the files it writes on the host are yours.
+    user: "${TALKIE_UID:-1000}:${TALKIE_GID:-1000}"
+    # localhost is the host's: Ollama, SearXNG and any other service.
+    network_mode: host
+    # Enter interrupts or talks; -train waits for it between steps.
+    stdin_open: true
+    tty: true
+    environment:
+      PULSE_SERVER: unix:/run/pulse/native
+    env_file:
+      - path: ${HOME}/.config/eino-talkie-agent/env   # the skills' secrets
+        required: false
+    volumes:
+      # The host's PipeWire or PulseAudio, and PulseAudio's cookie.
+      - type: bind
+        source: "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is unset, so run compose in your login session}/pulse/native"
+        target: /run/pulse/native
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${HOME}/.config/pulse
+        target: /config/pulse
+        read_only: true
+        bind: {create_host_path: false}
+      - ${HOME}/.config/eino-talkie-agent:/config/eino-talkie-agent
+      - ${HOME}/.config/talkie:/config/talkie
+      - ${TALKIE_DATA:-${HOME}/.local/share/eino-talkie-agent}:/data/eino-talkie-agent
+    depends_on:
+      searxng:
+        condition: service_healthy
+    restart: on-failure
+
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "127.0.0.1:8888:8080"
+    environment:
+      SEARXNG_SECRET: "${SEARXNG_SECRET:?set SEARXNG_SECRET in .env, for example to the output of openssl rand -hex 32}"
+      FORCE_OWNERSHIP: "false"   # leave the repository's settings.yml alone
+    volumes:
+      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped

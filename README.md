@@ -56,10 +56,11 @@ Jetson images run speech-to-text and text-to-speech on the GPU
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
 - The Jetson images build on [kokoro-run](https://github.com/androiddrew/kokoro-run)'s
   ONNX Runtime base images, which compile ONNX Runtime for the Jetson's GPU.
-  If kokoro-run's Jetson image is already on the machine, the base is there
-  too. Otherwise build it once, on the Jetson, in a kokoro-run checkout: `make
-  image-jetson-orin-onnxruntime` (about 4 hours) or `make
-  image-jetson-xavier-onnxruntime` (longer). kokoro-run's README has the
+  The Xavier's is on Docker Hub,
+  [`androiddrew/onnxruntime-jetson-xavier`](https://hub.docker.com/r/androiddrew/onnxruntime-jetson-xavier),
+  and `make image-jetson-xavier` pulls it. The Orin's isn't published: build
+  it once, on the Orin, in a kokoro-run checkout with `make
+  image-jetson-orin-onnxruntime` (about 4 hours); kokoro-run's README has the
   memory settings for the compile.
 
 ### 2. Make the host directories

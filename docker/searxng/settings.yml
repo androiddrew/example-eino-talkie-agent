@@ -1,0 +1,16 @@
+# SearXNG for the web-search skill, mounted read-only by compose.yaml. The
+# secret key comes from SEARXNG_SECRET in .env, which overrides the one here.
+use_default_settings: true
+server:
+  secret_key: "ultrasecretkey"    # replaced by SEARXNG_SECRET
+  limiter: false                  # only the agent uses it, from this machine
+  image_proxy: false
+search:
+  safe_search: 1
+  formats: [html, json]           # the skill asks for JSON
+outgoing:
+  request_timeout: 1.5            # a voice answer waits on the search
+  max_request_timeout: 2.0
+engines:
+  - name: brave                   # rate-limits SearXNG
+    disabled: true

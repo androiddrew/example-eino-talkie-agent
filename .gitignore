@@ -1,3 +1,4 @@
 /example-eino-talkie-agent
 /assets/
 /bin/
+.env
