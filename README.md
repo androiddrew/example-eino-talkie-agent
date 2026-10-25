@@ -17,12 +17,169 @@ It is an example, and a test of talkie-core's public API (`talkie.New`,
 `Agent`, `Turn`, `Reply`, `Interruption`, `Run`, `Config.OnEvent`) with a real
 agent framework.
 
-## Install
+You need **Linux**, a microphone and a speaker, and an **OpenAI-compatible
+LLM server**. The default is Ollama at `http://localhost:11434/v1` with
+`gemma4:e4b` (`ollama pull gemma4:e4b`). Run the agent in Docker, or install
+it on the machine; both keep the same files in the same places, so you can
+switch between them.
 
-You need **Linux**, **Go 1.25** and a C toolchain such as gcc (talkie-core
-uses CGO), a microphone and a speaker, and an **OpenAI-compatible LLM
-server**. The default is Ollama at `http://localhost:11434/v1` with
-`gemma4:e4b` (`ollama pull gemma4:e4b`).
+| On the host | What |
+|---|---|
+| `~/.config/eino-talkie-agent/config.yaml` | settings (see [Files and directories](#files-and-directories)) |
+| `~/.config/eino-talkie-agent/env` | the skills' secrets, such as `HASSIO_TOKEN`, as `KEY=value` lines |
+| `~/.config/eino-talkie-agent/skills/` | the skills |
+| `~/.config/talkie/rooms/` | the room profiles from training |
+| `~/.local/share/eino-talkie-agent/` | the models, about 1 GB; anywhere you like, such as `/data` |
+
+## Run it in Docker
+
+### 1. Build an image
+
+Clone this repository and build the image for your machine:
+
+| Image | For | Build |
+|---|---|---|
+| `eino-talkie-agent:cpu` | any x86-64 or arm64 machine | `make image-cpu` |
+| `eino-talkie-agent:cuda` | x86-64 with an NVIDIA GPU, CUDA 12 | `make image-cuda` |
+| `eino-talkie-agent:jetson-orin` | Jetson Orin, JetPack 7.2 | `make image-jetson-orin`, on the Orin |
+| `eino-talkie-agent:jetson-xavier` | Jetson Xavier NX or AGX, JetPack 5 | `make image-jetson-xavier`, on the Xavier |
+
+Each image holds the agent, a matching ONNX Runtime, Python for the skills,
+and talkie-core's `get-assets.sh`; the models stay on the host. The CUDA and
+Jetson images run speech-to-text and text-to-speech on the GPU
+(`EINO_TALKIE_CUDA=true`).
+
+- `make image-cpu` builds both platforms as `eino-talkie-agent:cpu-amd64` and
+  `cpu-arm64` and tags the host's as `cpu`; the other platform needs QEMU
+  `binfmt` support (`IMAGE_PLATFORMS=linux/amd64` builds one).
+- The CUDA image needs the
+  [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
+- The Jetson images build on [kokoro-run](https://github.com/androiddrew/kokoro-run)'s
+  ONNX Runtime base images, which compile ONNX Runtime for the Jetson's GPU.
+  If kokoro-run's Jetson image is already on the machine, the base is there
+  too. Otherwise build it once, on the Jetson, in a kokoro-run checkout: `make
+  image-jetson-orin-onnxruntime` (about 4 hours) or `make
+  image-jetson-xavier-onnxruntime` (longer). kokoro-run's README has the
+  memory settings for the compile.
+
+### 2. Make the host directories
+
+Make them first, as yourself: Docker would otherwise create missing ones as
+root.
+
+```
+mkdir -p ~/.config/eino-talkie-agent ~/.config/talkie ~/.local/share/eino-talkie-agent
+touch ~/.config/eino-talkie-agent/env && chmod 600 ~/.config/eino-talkie-agent/env
+```
+
+Every `docker run` below uses these options, which run the agent as you,
+mount the directories, reach your sound server and share the host's network,
+so `localhost` is the host's Ollama, SearXNG and so on:
+
+```
+talkie=(--user "$(id -u):$(id -g)" --network host
+  --mount type=bind,src="$XDG_RUNTIME_DIR/pulse/native",dst=/run/pulse/native
+  -e PULSE_SERVER=unix:/run/pulse/native
+  -v ~/.config/eino-talkie-agent:/config/eino-talkie-agent
+  -v ~/.config/talkie:/config/talkie
+  -v ~/.local/share/eino-talkie-agent:/data/eino-talkie-agent
+  --env-file ~/.config/eino-talkie-agent/env)
+```
+
+To keep the models somewhere else, such as `/data/talkie`, change the last
+`-v` to `-v /data/talkie:/data/eino-talkie-agent`. See [Sound](#sound) for a
+machine without PipeWire or PulseAudio, and to use the Pause key.
+
+### 3. Download the models
+
+The image's `get-assets.sh` downloads Parakeet and Kokoro into the data
+directory, each file pinned and checked against its SHA256:
+
+```
+docker run --rm "${talkie[@]}" --entrypoint get-assets.sh eino-talkie-agent:cpu \
+  -d /data/eino-talkie-agent --no-ort
+```
+
+`--no-ort` skips ONNX Runtime, which the image has. On a GPU, add `--fp32` for
+Parakeet's FP32 files (2.5 GB), a little more accurate than INT8.
+
+### 4. Install the skills
+
+```
+docker run --rm "${talkie[@]}" eino-talkie-agent:cpu -install-skills
+```
+
+Put the skills' secrets in `~/.config/eino-talkie-agent/env` (see
+[Office lights](#office-lights)), and any settings in `config.yaml`.
+
+### 5. Train talkie to the room
+
+Once per microphone and speaker. Stay quiet while it measures the room, then
+say the wake word ("hey computer") five times and read a sentence aloud;
+`-it` lets you press Enter between the steps:
+
+```
+docker run -it --rm "${talkie[@]}" eino-talkie-agent:cpu -train
+```
+
+### 6. Talk to it
+
+```
+docker run -it --rm "${talkie[@]}" eino-talkie-agent:cpu                     # CPU
+docker run -it --rm --gpus all "${talkie[@]}" eino-talkie-agent:cuda         # NVIDIA GPU
+docker run -it --rm --runtime nvidia "${talkie[@]}" eino-talkie-agent:jetson-orin
+```
+
+A short chime means it's listening. Flags go after the image name, for
+example `eino-talkie-agent:cpu -v`, and environment variables with `-e`, such
+as `-e EINO_TALKIE_MODEL=qwen3.5:9b`. `docker stop` stops it cleanly.
+
+To keep it running and start it when you log in, use the systemd user unit
+in [`systemd/eino-talkie-agent-docker.service`](systemd/eino-talkie-agent-docker.service).
+It starts the container after the sound server, which Docker's own restart
+policy can't wait for. Change its image, and add `--gpus all` or
+`--runtime nvidia` for a GPU, then install it as in
+[Run it as a service](#run-it-as-a-service).
+
+### Sound
+
+The options above connect to the host's PipeWire or PulseAudio server, the
+usual setup on a desktop: the agent sees the same microphones and speakers
+as your desktop, by the same names. With PulseAudio itself, rather than
+PipeWire, also mount its cookie:
+`--mount type=bind,src="$HOME/.config/pulse/cookie",dst=/config/pulse/cookie,readonly`.
+Without it, libpulse prints `Failed to load cookie file` at start-up, which
+PipeWire doesn't mind.
+
+On a machine with no sound server, such as a headless Jetson, use ALSA
+directly: replace the `--mount ... pulse` line and `PULSE_SERVER` with
+`--device /dev/snd --group-add "$(getent group audio | cut -d: -f3)"`. ALSA
+names the devices differently (for example `USB Audio`), and a device that a
+sound server is using can't be opened.
+
+For the Pause key, pass the keyboard in and give its group:
+`--device /dev/input/by-id/<your-keyboard>-event-kbd --group-add "$(getent group input | cut -d: -f3)" -e EINO_TALKIE_KEY=/dev/input/by-id/<your-keyboard>-event-kbd`.
+
+### Troubleshooting
+
+- **`--gpus all` fails with a missing `libnvidia-*.so`:**
+  the toolkit's device list is out of date after a driver update. Regenerate
+  it with `sudo nvidia-ctk cdi generate --output=/var/run/cdi/nvidia.yaml`
+  (or restart `nvidia-cdi-refresh.service`), or use `--runtime nvidia`
+  instead of `--gpus all`.
+- **No microphone or speaker:** check that `$XDG_RUNTIME_DIR/pulse/native`
+  exists on the host (`pactl info` names the server). The agent logs the
+  devices it opened at start-up.
+- **`Permission denied` on a mounted directory:** it belongs to another user,
+  or Docker created it as root; `sudo chown -R $USER` it.
+- **A host path in `config.yaml` doesn't apply:** the image pins `data`,
+  `ort`, `parakeet`, `kokoro` and `skills` to its own paths with environment
+  variables, so a `config.yaml` shared with a local install can keep the
+  host's paths.
+
+## Run it locally
+
+You need **Go 1.25** and a C toolchain such as gcc (talkie-core uses CGO).
 
 1. **Install the agent and its skills:**
    ```
@@ -30,26 +187,58 @@ server**. The default is Ollama at `http://localhost:11434/v1` with
    example-eino-talkie-agent -install-skills
    ```
    `-install-skills` writes the bundled skills into
-   `~/.config/eino-talkie-agent/skills` and keeps any already there.
+   `~/.config/eino-talkie-agent/skills` and keeps any already there. From a
+   clone, `go run .` runs the same program.
 2. **Download ONNX Runtime 1.22, Parakeet TDT 0.6B v3 and Kokoro v1.0** into
-   the agent's data directory with talkie-core's `get-assets.sh`. Each file
-   is pinned and checked against its SHA256 (about 1 GB):
+   the agent's data directory with talkie-core's `get-assets.sh`, each file
+   pinned and checked against its SHA256 (about 1 GB):
    ```
    curl -fsSL https://raw.githubusercontent.com/androiddrew/talkie-core/v0.1.0/scripts/get-assets.sh \
      | bash -s -- -d ~/.local/share/eino-talkie-agent
    ```
-   Add `--cuda` after `-d DIR` for the GPU build of ONNX Runtime, which needs
-   CUDA 12 and cuDNN 9. To keep the models elsewhere, such as `/data`, give
-   that directory to `-d` and to the agent (see
-   [Files and directories](#files-and-directories)). The wake word and VAD
-   models are embedded in their Go modules.
-3. **Train talkie to the room** once (see [Room training](#room-training)).
+   Add `--cuda` after the directory for the GPU build of ONNX Runtime, which
+   needs CUDA 12 and cuDNN 9. To keep the models elsewhere, such as
+   `/data/talkie`, give that directory to `-d` and put `data: /data/talkie`
+   in `config.yaml`. On a Jetson, install ONNX Runtime with CUDA yourself,
+   add `--no-ort`, and set `ort` to its library.
+3. **Train talkie to the room**, once per microphone and speaker: stay quiet
+   while it measures the room, then say the wake word ("hey computer") five
+   times and read a sentence aloud.
+   ```
+   example-eino-talkie-agent -train
+   ```
 4. **Talk to it:**
    ```
    example-eino-talkie-agent        # add -cuda with the GPU build
    ```
 
-From a clone, `go run .` runs the same program.
+### Run it as a service
+
+[`systemd/eino-talkie-agent.service`](systemd/eino-talkie-agent.service) runs
+the installed agent as a systemd user service, in your session, so it uses
+your sound server as it does in a terminal:
+
+```
+mkdir -p ~/.config/systemd/user
+curl -fsSL -o ~/.config/systemd/user/eino-talkie-agent.service \
+  https://raw.githubusercontent.com/androiddrew/example-eino-talkie-agent/main/systemd/eino-talkie-agent.service
+systemctl --user daemon-reload
+systemctl --user enable --now eino-talkie-agent
+journalctl --user -u eino-talkie-agent -f        # its log
+```
+
+- It runs `~/go/bin/example-eino-talkie-agent`; edit `ExecStart` if
+  `go install` put it elsewhere (`go env GOBIN GOPATH`).
+- Settings come from `config.yaml`, and the skills' secrets from
+  `~/.config/eino-talkie-agent/env`; `systemctl --user restart
+  eino-talkie-agent` after changing them. Skills apply on the next question
+  without a restart.
+- It starts when you log in. To start it at boot without logging in, as on a
+  headless Jetson, run `sudo loginctl enable-linger $USER`.
+- `systemctl --user stop eino-talkie-agent` stops it cleanly, and it restarts
+  on a failure.
+
+## Using it
 
 At start-up it asks the model for one token, so Ollama loads the model before
 your first question. Then talkie loads its models and plays the ready chime.
@@ -72,27 +261,23 @@ Before you start, check:
   `curl -s http://localhost:11434/api/tags | grep gemma4:e4b`
 - **SearXNG** is running, for web search:
   `curl -s http://127.0.0.1:8888/healthz` prints `OK`
-- **Home Assistant** is set up in this shell, for the office lights (see
+- **Home Assistant** is set up for the office lights (see
   [Office lights](#office-lights)): `HASSIO_TOKEN`, `OFFICE_LIGHTS` and, unless
-  it's at `http://homeassistant.local:8123`, `HASSIO_API`
+  it's at `http://homeassistant.local:8123`, `HASSIO_API`, in your shell or in
+  `~/.config/eino-talkie-agent/env`
 - **The skills** are installed: `ls ~/.config/eino-talkie-agent/skills`
   lists `kids-story`, `office-lights` and `web-search`
-- **The room** is trained, which only needs doing once per room and devices
-  (see [Room training](#room-training))
+- **The room** is trained (`-train`)
 
-Then launch:
+Then launch it with these settings in `config.yaml`:
 
+```yaml
+cuda: true
+voice: af_heart
+wake: hey computer
+barge-in: wake
+key: /dev/input/by-id/<your-keyboard>-event-kbd
 ```
-example-eino-talkie-agent \
-  -cuda \
-  -voice af_heart \
-  -wake "hey computer" \
-  -barge-in wake \
-  -key /dev/input/by-id/<your-keyboard>-event-kbd
-```
-
-The same settings can go in `config.yaml` instead (see
-[Files and directories](#files-and-directories)).
 
 `-key` lets the Pause key interrupt even when the terminal isn't focused. It
 needs read access to the keyboard: run `sudo usermod -aG input $USER` and log
@@ -147,6 +332,7 @@ spec:
 | Skills | `$XDG_CONFIG_HOME/eino-talkie-agent/skills/` | `-skills` |
 | ONNX Runtime and the models | `$XDG_DATA_HOME/eino-talkie-agent/` | `-data`, `EINO_TALKIE_DATA` |
 | Room profiles (talkie-core's) | `$XDG_CONFIG_HOME/talkie/rooms/` | |
+| The skills' secrets (read by the systemd unit and `docker run --env-file`) | `$XDG_CONFIG_HOME/eino-talkie-agent/env` | |
 
 `$XDG_CONFIG_HOME` defaults to `~/.config` and `$XDG_DATA_HOME` to
 `~/.local/share`. The data directory has the layout `get-assets.sh -d`
@@ -167,17 +353,26 @@ barge-in: wake
 key: /dev/input/by-id/usb-My_Keyboard-event-kbd
 ```
 
-A setting comes from, in order: its flag, its environment variable,
-`config.yaml`, then its default. Paths may start with `~/`. An unknown key is
-an error, so a misspelled setting doesn't go unnoticed.
+Every flag also has an environment variable: `EINO_TALKIE_` and the flag's
+name in upper case with `_` for `-`, such as `EINO_TALKIE_CUDA=true` or
+`EINO_TALKIE_BASE_URL`. `OPENAI_BASE_URL`, `OPENAI_API_MODEL`,
+`OPENAI_API_KEY` and `TALKIE_ORT` work too. A setting comes from, in order:
+its flag, its environment variable, `config.yaml`, then its default. Paths
+may start with `~/`. An unknown key is an error, so a misspelled setting
+doesn't go unnoticed.
 
 ## Flags
 
-| Flag | Env | Default | |
+Each flag's environment variable is `EINO_TALKIE_` and its name (see
+[Files and directories](#files-and-directories)); the table gives the older
+names that also work.
+
+| Flag | Also | Default | |
 |---|---|---|---|
-| `-config` | `EINO_TALKIE_CONFIG` | `$XDG_CONFIG_HOME/eino-talkie-agent/config.yaml` | the settings file; a missing default one is fine |
-| `-data` | `EINO_TALKIE_DATA` | `$XDG_DATA_HOME/eino-talkie-agent` | ONNX Runtime and the models |
+| `-config` | | `$XDG_CONFIG_HOME/eino-talkie-agent/config.yaml` | the settings file; a missing default one is fine |
+| `-data` | | `$XDG_DATA_HOME/eino-talkie-agent` | ONNX Runtime and the models |
 | `-install-skills` | | | install the bundled skills into `-skills`, keeping any there, and exit |
+| `-train` | | | train talkie to the room and the devices, save the profile, and exit |
 | `-base-url` | `OPENAI_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible API |
 | `-model` | `OPENAI_API_MODEL` | `gemma4:e4b` | e.g. `qwen3.5:9b` (see [Models](#models)) |
 | `-api-key` | `OPENAI_API_KEY` | `ollama` | Ollama ignores it |
@@ -381,19 +576,16 @@ any one model:
 
 ## Room training
 
-Train talkie to the room with talkie-core's demo, once per microphone and
-speaker. It takes about a minute: stay quiet while it measures the room,
-then say the wake word ("hey computer") five times and read a sentence aloud.
-
-```
-data=~/.local/share/eino-talkie-agent
-go run github.com/androiddrew/talkie-core/cmd/talkie-demo@v0.1.0 -train \
-  -ort $data/onnxruntime/lib/libonnxruntime.so -kokoro $data/kokoro
-```
-
-This example uses the same profile, because profiles are keyed by device
-names in `~/.config/talkie/rooms`. Add `-list` instead of `-train` to list
-the devices, and `-input` and `-output` to pick them.
+`-train` tunes talkie to the room, once per microphone and speaker. It takes
+about a minute: stay quiet while it measures the room's noise and the
+speaker's echo, listen while Kokoro speaks a paragraph so the echo canceller
+learns the room, then say the wake word five times and read a sentence aloud,
+which tunes the wake word to your voice. It prints what it found, with advice
+such as turning the speaker down, and saves the profile in
+`~/.config/talkie/rooms`, keyed by the devices' names. Pick the devices with
+`-input` and `-output`, by part of their names, as when you run the agent;
+the agent logs the names it opened at start-up. talkie-core's
+`talkie-demo -train` writes the same profiles.
 
 ## Why thinking is off
 
@@ -431,8 +623,10 @@ was complete about 1 s after the agent was called.
 - `skills.go` reads the skills, builds the system prompt and the tool for
   each skill, and turns tool errors into results. `install.go` writes the
   skills embedded in the binary for `-install-skills`.
-- `config.go` finds the XDG directories, applies `config.yaml` to the flags
-  and finds the models in the data directory.
+- `config.go` finds the XDG directories, applies the environment and
+  `config.yaml` to the flags, and finds the models in the data directory.
+- `train.go` is `-train`, room training through talkie-core's `Train`.
+- `docker/` has the images, `systemd/` the user units.
 - `latency.go` joins talkie's events from `Config.OnEvent` with the agent's
   timings over a buffered channel. OnEvent never blocks: when the channel is
   full, the record is dropped and counted.
@@ -466,6 +660,9 @@ another model, and `EINO_TALKIE_TEST_TEMP` to test another temperature.
   arguments. Install only skills you trust.
 - Every skill's instructions are in every turn's prompt, which suits a few
   short skills.
+- The Jetson images haven't been built or run yet; the CPU and CUDA images
+  have, on x86-64 with PipeWire. In Docker, ALSA can't open a device a sound
+  server on the host is using.
 
 ## License
 

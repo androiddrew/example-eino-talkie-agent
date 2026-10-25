@@ -21,7 +21,8 @@ import (
 // The data directory has the layout talkie-core's get-assets.sh writes
 // (onnxruntime/lib, parakeet, kokoro), and -ort, -parakeet and -kokoro
 // override each part. A setting comes from, in order: its flag, its
-// environment variable, config.yaml, then its default.
+// environment variable (EINO_TALKIE_ and the flag's name, such as
+// EINO_TALKIE_CUDA), config.yaml, then its default.
 
 const appName = "eino-talkie-agent"
 
@@ -65,25 +66,57 @@ func defaultSkillsDir() string {
 	return ""
 }
 
-// flagEnv names the environment variable a flag's default comes from. The
-// variable takes precedence over config.yaml.
-var flagEnv = map[string]string{
-	"config":   "EINO_TALKIE_CONFIG",
-	"data":     "EINO_TALKIE_DATA",
+// envAliases are older environment variables for some flags, read after
+// their EINO_TALKIE_ ones.
+var envAliases = map[string]string{
 	"base-url": "OPENAI_BASE_URL",
 	"model":    "OPENAI_API_MODEL",
 	"api-key":  "OPENAI_API_KEY",
 	"ort":      "TALKIE_ORT",
 }
 
+// envNames are the environment variables for a flag: EINO_TALKIE_ and its
+// name in upper case with _ for -, then its alias.
+func envNames(name string) []string {
+	names := []string{"EINO_TALKIE_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))}
+	if alias := envAliases[name]; alias != "" {
+		names = append(names, alias)
+	}
+	return names
+}
+
+// applyEnv sets the flags not set on the command line from their environment
+// variables, and returns the names of the flags set either way, which
+// config.yaml then leaves alone.
+func applyEnv(flags *flag.FlagSet) (map[string]bool, error) {
+	set := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	var err error
+	flags.VisitAll(func(f *flag.Flag) {
+		if set[f.Name] || err != nil || f.Name == "install-skills" || f.Name == "train" {
+			return
+		}
+		for _, env := range envNames(f.Name) {
+			if v := os.Getenv(env); v != "" {
+				if e := f.Value.Set(v); e != nil {
+					err = fmt.Errorf("%s: %w", env, e)
+				}
+				set[f.Name] = true
+				return
+			}
+		}
+	})
+	return set, err
+}
+
 // pathFlags are the flags whose values may start with ~/.
 var pathFlags = []string{"config", "data", "skills", "ort", "parakeet", "kokoro", "key"}
 
 // applyConfig sets flags from the YAML file at path, whose keys are flag
-// names, except those set on the command line or by their environment
-// variable. A missing file is an error only when explicit, since the default
-// one is optional.
-func applyConfig(flags *flag.FlagSet, path string, explicit bool) error {
+// names, except those already set, on the command line or by their
+// environment variables. A missing file is an error only when explicit, since
+// the default one is optional.
+func applyConfig(flags *flag.FlagSet, path string, explicit bool, set map[string]bool) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) && !explicit {
 		return nil
@@ -95,13 +128,11 @@ func applyConfig(flags *flag.FlagSet, path string, explicit bool) error {
 	if err := yaml.Unmarshal(data, &settings); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	set := map[string]bool{}
-	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	for name, value := range settings {
-		if flags.Lookup(name) == nil || name == "config" || name == "install-skills" {
+		if flags.Lookup(name) == nil || name == "config" || name == "install-skills" || name == "train" {
 			return fmt.Errorf("%s: %q isn't a setting (see -h)", path, name)
 		}
-		if env := flagEnv[name]; set[name] || env != "" && os.Getenv(env) != "" {
+		if set[name] {
 			continue
 		}
 		switch value.(type) {

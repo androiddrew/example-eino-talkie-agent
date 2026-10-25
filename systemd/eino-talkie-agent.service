@@ -1,0 +1,31 @@
+# The agent as a systemd user service, so it talks through your PipeWire or
+# PulseAudio session, as it does in your terminal. Install it with
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp eino-talkie-agent.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now eino-talkie-agent
+#
+# and follow it with `journalctl --user -u eino-talkie-agent -f`. Settings go
+# in ~/.config/eino-talkie-agent/config.yaml; the skills' secrets, such as
+# HASSIO_TOKEN, as KEY=value lines in ~/.config/eino-talkie-agent/env.
+# `sudo loginctl enable-linger $USER` starts it at boot, before you log in.
+
+[Unit]
+Description=eino-talkie-agent, a voice agent
+Documentation=https://github.com/androiddrew/example-eino-talkie-agent
+# The microphone and speaker come from the session's sound server.
+After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+
+[Service]
+Type=exec
+EnvironmentFile=-%h/.config/eino-talkie-agent/env
+# Where go install puts it; change it if GOBIN or GOPATH say otherwise.
+ExecStart=%h/go/bin/example-eino-talkie-agent
+# It stops cleanly on SIGTERM. A failure, such as the sound server
+# restarting, starts it again.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

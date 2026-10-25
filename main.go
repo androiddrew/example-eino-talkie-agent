@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	talkie "github.com/androiddrew/talkie-core"
@@ -51,19 +52,20 @@ const voicePrompt = "You are a voice assistant. Your replies are spoken aloud, s
 
 func main() {
 	var (
-		configFile   = flag.String("config", env("EINO_TALKIE_CONFIG", defaultConfigFile()), "settings file: flag names as YAML keys")
-		data         = flag.String("data", env("EINO_TALKIE_DATA", dataDir()), "directory with ONNX Runtime and the models, as talkie-core's get-assets.sh -d writes them")
+		configFile   = flag.String("config", defaultConfigFile(), "settings file: flag names as YAML keys")
+		data         = flag.String("data", dataDir(), "directory with ONNX Runtime and the models, as talkie-core's get-assets.sh -d writes them")
 		installSkill = flag.Bool("install-skills", false, "install the bundled skills into -skills, keeping any already there, and exit")
-		baseURL      = flag.String("base-url", env("OPENAI_BASE_URL", defaultBaseURL), "OpenAI-compatible API base URL")
-		modelID      = flag.String("model", env("OPENAI_API_MODEL", defaultModel), "model name")
-		apiKey       = flag.String("api-key", env("OPENAI_API_KEY", "ollama"), "API key (Ollama ignores it)")
+		train        = flag.Bool("train", false, "train talkie to this room and these devices, save the profile, and exit")
+		baseURL      = flag.String("base-url", defaultBaseURL, "OpenAI-compatible API base URL")
+		modelID      = flag.String("model", defaultModel, "model name")
+		apiKey       = flag.String("api-key", "ollama", "API key (Ollama ignores it)")
 		reasoning    = flag.String("reasoning", "none", `reasoning effort: "none" turns thinking off; "low", "medium" and "high" are too slow for voice`)
 		temp         = flag.Float64("temperature", 0.2, "sampling temperature; low keeps skill use reliable; negative for the server's default")
 		instruction  = flag.String("instruction", voicePrompt, "system prompt")
 		textMode     = flag.Bool("text", false, "no audio: read turns from stdin and print the replies")
 		skillsDir    = flag.String("skills", defaultSkillsDir(), `directory of skills, each a directory with a SKILL.md; "" for none`)
 
-		ort      = flag.String("ort", os.Getenv("TALKIE_ORT"), "ONNX Runtime library, a path or loader name (default: in -data, else libonnxruntime.so)")
+		ort      = flag.String("ort", "", "ONNX Runtime library, a path or loader name (default: in -data, else libonnxruntime.so)")
 		cuda     = flag.Bool("cuda", false, "run speech-to-text and text-to-speech on the GPU")
 		parakeet = flag.String("parakeet", "", "directory with the Parakeet TDT 0.6B v3 ONNX files (default: parakeet in -data)")
 		int8     = flag.Bool("int8", false, "use Parakeet's INT8 files, faster on CPU; the default when the FP32 files aren't there")
@@ -79,14 +81,17 @@ func main() {
 		latency  = flag.Duration("latency", 0, "speaker-to-microphone round trip (default 100ms)")
 		verbose  = flag.Bool("v", false, "log every state change")
 	)
+	flag.Usage = usage
 	flag.Parse()
-	explicit := false
-	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "config" })
+	set, err := applyEnv(flag.CommandLine)
+	if err != nil {
+		fail(err)
+	}
 	if err := expandHome(flag.CommandLine); err != nil {
 		fail(err)
 	}
 	if *configFile != "" {
-		if err := applyConfig(flag.CommandLine, *configFile, explicit || os.Getenv("EINO_TALKIE_CONFIG") != ""); err != nil {
+		if err := applyConfig(flag.CommandLine, *configFile, set["config"], set); err != nil {
 			fail(err)
 		}
 	}
@@ -108,8 +113,25 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// docker stop and systemd send SIGTERM.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *train {
+		a, err := resolveAssets(*data, assets{ORT: *ort, Parakeet: *parakeet, Kokoro: *kokoro, INT8: *int8})
+		if err != nil {
+			fail(err)
+		}
+		cfg := talkie.Config{ORTLibrary: a.ORT, CUDA: *cuda, WakeWord: *wake, InputDevice: *input, OutputDevice: *output,
+			Kokoro: talkie.KokoroConfig{
+				ModelPath:  filepath.Join(a.Kokoro, "kokoro-v1.0.onnx"),
+				VoicesPath: filepath.Join(a.Kokoro, "voices-v1.0.bin"),
+				Voice:      *voice,
+			}}
+		if err := trainRoom(ctx, cfg, os.Stdin, os.Stdout); err != nil {
+			fail(err)
+		}
+		return
+	}
 	cm, err := newChatModel(ctx, *baseURL, *modelID, *apiKey, *reasoning, *temp)
 	if err != nil {
 		fail(err)
@@ -323,6 +345,20 @@ func env(name, def string) string {
 		return v
 	}
 	return def
+}
+
+// usage prints the flags, and where else settings come from.
+func usage() {
+	out := flag.CommandLine.Output()
+	fmt.Fprintf(out, "Usage: %s [flags]\n\n", filepath.Base(os.Args[0]))
+	flag.PrintDefaults()
+	fmt.Fprintf(out, `
+Every flag can also be set by an environment variable, EINO_TALKIE_ and its
+name in upper case with _ for -, such as EINO_TALKIE_CUDA=true, or in
+config.yaml (-config) with its name as the key. A flag wins over its
+variable, which wins over config.yaml. OPENAI_BASE_URL, OPENAI_API_MODEL,
+OPENAI_API_KEY and TALKIE_ORT still work.
+`)
 }
 
 func fail(err error) {

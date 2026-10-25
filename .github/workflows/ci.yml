@@ -25,3 +25,18 @@ jobs:
       - run: go vet ./...
       # The unit tests use a fake chat model: no network, no ONNX Runtime.
       - run: go test -race ./...
+
+  image:
+    name: Build the CPU image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: docker buildx build --platform linux/amd64 -f docker/Dockerfile.cpu --load -t eino-talkie-agent:cpu .
+      - name: Smoke test
+        run: |
+          docker run --rm eino-talkie-agent:cpu -h 2>&1 | grep -q -- -install-skills
+          docker run --rm --entrypoint get-assets.sh eino-talkie-agent:cpu --help | grep -q get-assets
+          dir=$(mktemp -d) && chmod 777 "$dir"
+          docker run --rm -v "$dir:/config/eino-talkie-agent" eino-talkie-agent:cpu -install-skills
+          docker run --rm -v "$dir:/config/eino-talkie-agent" --entrypoint /config/eino-talkie-agent/skills/kids-story/scripts/kids-story eino-talkie-agent:cpu bedtime | grep -q Kind

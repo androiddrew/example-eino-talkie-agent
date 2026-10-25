@@ -86,11 +86,15 @@ wake: ""
 `)
 	t.Setenv("OPENAI_BASE_URL", "http://from-env")
 	fs, v := testFlags(t, "-model", "cli-model")
-	if err := applyConfig(fs, path, true); err != nil {
+	set, err := applyEnv(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyConfig(fs, path, true, set); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]any{
-		"base-url":    "http://default", // the environment wins; its value is in the flag's default
+		"base-url":    "http://from-env",
 		"model":       "cli-model",
 		"data":        "/data/talkie",
 		"int8":        true,
@@ -115,6 +119,40 @@ wake: ""
 	}
 }
 
+// TestApplyEnv: EINO_TALKIE_ and the flag's name sets any flag, before its
+// older alias and after the command line.
+func TestApplyEnv(t *testing.T) {
+	t.Setenv("EINO_TALKIE_BASE_URL", "http://new")
+	t.Setenv("OPENAI_BASE_URL", "http://old")
+	t.Setenv("OPENAI_API_MODEL", "alias-model")
+	t.Setenv("EINO_TALKIE_INT8", "1")
+	t.Setenv("EINO_TALKIE_LATENCY", "120ms")
+	t.Setenv("EINO_TALKIE_DATA", "/env/data")
+	fs, v := testFlags(t, "-data", "/cli/data")
+	set, err := applyEnv(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *v["base-url"].(*string) != "http://new" || *v["model"].(*string) != "alias-model" || !*v["int8"].(*bool) ||
+		*v["latency"].(*time.Duration) != 120*time.Millisecond || *v["data"].(*string) != "/cli/data" {
+		t.Errorf("flags %v %v %v %v %v", *v["base-url"].(*string), *v["model"].(*string), *v["int8"].(*bool), *v["latency"].(*time.Duration), *v["data"].(*string))
+	}
+	for _, name := range []string{"base-url", "model", "int8", "latency", "data"} {
+		if !set[name] {
+			t.Errorf("%s not reported as set", name)
+		}
+	}
+	if set["wake"] || set["temperature"] {
+		t.Errorf("unset flags reported: %v", set)
+	}
+
+	t.Setenv("EINO_TALKIE_INT8", "maybe")
+	fs, _ = testFlags(t)
+	if _, err := applyEnv(fs); err == nil || !strings.Contains(err.Error(), "EINO_TALKIE_INT8") {
+		t.Errorf("bad value: %v", err)
+	}
+}
+
 func TestApplyConfigErrors(t *testing.T) {
 	for _, c := range []struct{ body, want string }{
 		{"modle: x\n", `"modle" isn't a setting`},
@@ -124,17 +162,17 @@ func TestApplyConfigErrors(t *testing.T) {
 		{"model: x\n  bad indent: y\n", "yaml"},
 	} {
 		fs, _ := testFlags(t)
-		err := applyConfig(fs, writeConfig(t, c.body), true)
+		err := applyConfig(fs, writeConfig(t, c.body), true, nil)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%q: error %v, want one with %q", c.body, err, c.want)
 		}
 	}
 	fs, _ := testFlags(t)
 	missing := filepath.Join(t.TempDir(), "config.yaml")
-	if err := applyConfig(fs, missing, false); err != nil {
+	if err := applyConfig(fs, missing, false, nil); err != nil {
 		t.Errorf("missing default config: %v", err)
 	}
-	if err := applyConfig(fs, missing, true); err == nil {
+	if err := applyConfig(fs, missing, true, nil); err == nil {
 		t.Error("missing -config: no error")
 	}
 }

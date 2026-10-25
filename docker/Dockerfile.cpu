@@ -1,0 +1,98 @@
+# syntax=docker/dockerfile:1
+#
+# The CPU image, for linux/amd64 and linux/arm64. Build it with `make image-cpu`.
+#
+# It holds the agent, ONNX Runtime and talkie-core's get-assets.sh, but no
+# models: those, config.yaml, the skills and the room profiles live on the
+# host and are mounted in (see the README's "Run it in Docker").
+#
+#   /config/eino-talkie-agent  config.yaml and skills/  ($XDG_CONFIG_HOME)
+#   /config/talkie             talkie's room profiles
+#   /data/eino-talkie-agent    the models               ($XDG_DATA_HOME)
+#
+#   VERSION  the image's version label
+
+ARG ORT_VERSION=1.22.0
+# Go 1.26: bytedance/sonic, which eino uses for JSON, supports Go up to 1.26
+# and warns at every start on a newer one.
+ARG GO_IMAGE=golang:1.26-bookworm
+
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS src
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+# get-assets.sh comes from the talkie-core version the agent requires.
+RUN --mount=type=cache,target=/go/pkg/mod \
+	install -D -m 0755 "$(go list -m -f '{{.Dir}}' github.com/androiddrew/talkie-core)/scripts/get-assets.sh" /out/get-assets.sh
+
+# The cgo binary, cross-compiled for the target with Debian's cross toolchain.
+FROM src AS build
+ARG TARGETARCH
+RUN set -eux; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends "crossbuild-essential-$TARGETARCH"; \
+	rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+	set -eux; \
+	case "$TARGETARCH" in \
+		amd64) cc=x86_64-linux-gnu-gcc ;; \
+		arm64) cc=aarch64-linux-gnu-gcc ;; \
+		*) echo "unsupported TARGETARCH $TARGETARCH" >&2; exit 1 ;; \
+	esac; \
+	CGO_ENABLED=1 GOOS=linux GOARCH="$TARGETARCH" CC="$cc" \
+		go build -trimpath -ldflags "-s -w" -o /out/example-eino-talkie-agent .
+
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS onnxruntime
+ARG TARGETARCH
+ARG ORT_VERSION
+ARG ORT_SHA256_amd64=8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3
+ARG ORT_SHA256_arm64=bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702
+RUN set -eux; \
+	case "$TARGETARCH" in \
+		amd64) arch=x64; sum="$ORT_SHA256_amd64" ;; \
+		arm64) arch=aarch64; sum="$ORT_SHA256_arm64" ;; \
+		*) echo "unsupported TARGETARCH $TARGETARCH" >&2; exit 1 ;; \
+	esac; \
+	curl -fsSL -o /ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-linux-$arch-$ORT_VERSION.tgz"; \
+	echo "$sum  /ort.tgz" | sha256sum -c -; \
+	mkdir /onnxruntime; \
+	tar xzf /ort.tgz --no-same-owner --strip-components=1 -C /onnxruntime
+
+FROM debian:bookworm-slim
+ARG ORT_VERSION
+ARG VERSION=devel
+LABEL org.opencontainers.image.title="eino-talkie-agent" \
+	org.opencontainers.image.description="A voice agent: talkie-core and an eino agent, on the CPU" \
+	org.opencontainers.image.source="https://github.com/androiddrew/example-eino-talkie-agent" \
+	org.opencontainers.image.version="$VERSION" \
+	org.opencontainers.image.licenses="Apache-2.0"
+# miniaudio loads ALSA or PulseAudio (which PipeWire also serves) at run
+# time; the skills' scripts are Python; get-assets.sh needs curl.
+RUN set -eux; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends ca-certificates curl libasound2 libpulse0 python3; \
+	rm -rf /var/lib/apt/lists/*; \
+	useradd --uid 10001 --user-group --no-create-home --shell /usr/sbin/nologin talkie
+
+ARG DOCS=/usr/share/doc/eino-talkie-agent
+COPY LICENSE NOTICE THIRD_PARTY.md $DOCS/
+COPY --from=onnxruntime /onnxruntime/LICENSE /onnxruntime/ThirdPartyNotices.txt $DOCS/onnxruntime/
+COPY --from=onnxruntime /onnxruntime/lib/libonnxruntime.so.$ORT_VERSION /opt/onnxruntime/lib/
+COPY --from=src /out/get-assets.sh /usr/local/bin/get-assets.sh
+COPY --from=build /out/example-eino-talkie-agent /usr/local/bin/example-eino-talkie-agent
+
+# The XDG directories are the mount points. The paths are pinned with
+# variables, which win over config.yaml, so a config.yaml shared with an
+# install on the host can keep the host's paths. HOME suits any --user.
+ENV XDG_CONFIG_HOME=/config \
+	XDG_DATA_HOME=/data \
+	HOME=/tmp \
+	EINO_TALKIE_ORT=/opt/onnxruntime/lib/libonnxruntime.so.$ORT_VERSION \
+	EINO_TALKIE_DATA=/data/eino-talkie-agent \
+	EINO_TALKIE_PARAKEET=/data/eino-talkie-agent/parakeet \
+	EINO_TALKIE_KOKORO=/data/eino-talkie-agent/kokoro \
+	EINO_TALKIE_SKILLS=/config/eino-talkie-agent/skills
+USER talkie
+WORKDIR /tmp
+ENTRYPOINT ["example-eino-talkie-agent"]

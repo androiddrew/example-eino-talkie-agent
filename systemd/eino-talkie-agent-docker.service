@@ -1,0 +1,30 @@
+# The agent's Docker image as a systemd user service. Starting it from your
+# session, rather than with docker's restart policy, waits for the sound
+# server's socket. Install it like eino-talkie-agent.service; change the
+# image (cpu, cuda, jetson-orin, jetson-xavier) and, for a GPU, add
+# --gpus all (CUDA) or --runtime nvidia (Jetson) to the docker run line.
+# ~/.config/eino-talkie-agent/env must exist, even empty.
+
+[Unit]
+Description=eino-talkie-agent, a voice agent, in Docker
+Documentation=https://github.com/androiddrew/example-eino-talkie-agent
+After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+
+[Service]
+Type=exec
+ExecStartPre=-/usr/bin/docker rm -f eino-talkie-agent
+ExecStart=/usr/bin/docker run --rm --name eino-talkie-agent \
+	--user %U:%G --network host \
+	--mount type=bind,src=%t/pulse/native,dst=/run/pulse/native \
+	-e PULSE_SERVER=unix:/run/pulse/native \
+	-v %h/.config/eino-talkie-agent:/config/eino-talkie-agent \
+	-v %h/.config/talkie:/config/talkie \
+	-v %h/.local/share/eino-talkie-agent:/data/eino-talkie-agent \
+	--env-file %h/.config/eino-talkie-agent/env \
+	eino-talkie-agent:cpu
+ExecStop=/usr/bin/docker stop eino-talkie-agent
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
