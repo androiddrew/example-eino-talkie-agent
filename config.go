@@ -110,7 +110,7 @@ func applyEnv(flags *flag.FlagSet) (map[string]bool, error) {
 }
 
 // pathFlags are the flags whose values may start with ~/.
-var pathFlags = []string{"config", "data", "skills", "ort", "parakeet", "kokoro", "key"}
+var pathFlags = []string{"config", "data", "skills", "ort", "parakeet", "kokoro", "key", "cue-listening", "cue-thinking", "cue-idle"}
 
 // applyConfig sets flags from the YAML file at path, whose keys are flag
 // names, except those already set, on the command line or by their

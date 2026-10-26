@@ -194,7 +194,7 @@ You need **Go 1.25** and a C toolchain such as gcc (talkie-core uses CGO).
    the agent's data directory with talkie-core's `get-assets.sh`, each file
    pinned and checked against its SHA256 (about 1 GB):
    ```
-   curl -fsSL https://raw.githubusercontent.com/androiddrew/talkie-core/v0.1.0/scripts/get-assets.sh \
+   curl -fsSL https://raw.githubusercontent.com/androiddrew/talkie-core/v0.2.0/scripts/get-assets.sh \
      | bash -s -- -d ~/.local/share/eino-talkie-agent
    ```
    Add `--cuda` after the directory for the GPU build of ONNX Runtime, which
@@ -312,6 +312,30 @@ Each reply logs a `turn_latency` line:
 talkie's states (`[listening]`, `[thinking]`, `[speaking]`, ...) print to
 stdout as they change.
 
+### Sounds instead of a screen
+
+Without a screen, you can't see when the agent is listening or thinking.
+Three optional sounds tell you, all off unless you turn them on:
+
+| Setting | Plays |
+|---|---|
+| `cue-listening` | when it starts listening: after the wake word, Enter, or the Pause key |
+| `cue-thinking` | on repeat while it thinks: from half a second after you stop talking until the answer starts |
+| `cue-idle` | when the conversation ends and it waits for the wake word again |
+
+Each is `default` for talkie's built-in sound (two glassy notes up, the same
+down, and a quiet hum that swells and fades), the path to a WAV file of your
+own, or empty for none:
+
+```yaml
+cue-listening: default
+cue-thinking: ~/.config/eino-talkie-agent/sounds/thinking.wav
+cue-idle: default
+```
+
+A thinking sound should loop seamlessly. talkie plays the sounds through its
+own output, so the echo canceller keeps them out of what it hears.
+
 ### Without audio
 
 `-text` runs the same agent with no audio and no ONNX Runtime. Each line of
@@ -382,6 +406,7 @@ names that also work.
 | `-skills` | | `$XDG_CONFIG_HOME/eino-talkie-agent/skills` | the skills directory; `""` for none |
 | `-instruction` | | a voice prompt | the system prompt |
 | `-text` | | off | no audio: stdin turns, printed replies |
+| `-cue-listening`, `-cue-thinking`, `-cue-idle` | | none | sounds for listening, thinking and idle: `default`, a WAV file, or none (see [Sounds instead of a screen](#sounds-instead-of-a-screen)) |
 
 The talkie flags are the same as `talkie-demo`'s: `-ort` (or `TALKIE_ORT`),
 `-cuda`, `-parakeet`, `-int8`, `-kokoro` (these three default to the data

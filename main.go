@@ -65,21 +65,24 @@ func main() {
 		textMode     = flag.Bool("text", false, "no audio: read turns from stdin and print the replies")
 		skillsDir    = flag.String("skills", defaultSkillsDir(), `directory of skills, each a directory with a SKILL.md; "" for none`)
 
-		ort      = flag.String("ort", "", "ONNX Runtime library, a path or loader name (default: in -data, else libonnxruntime.so)")
-		cuda     = flag.Bool("cuda", false, "run speech-to-text and text-to-speech on the GPU")
-		parakeet = flag.String("parakeet", "", "directory with the Parakeet TDT 0.6B v3 ONNX files (default: parakeet in -data)")
-		int8     = flag.Bool("int8", false, "use Parakeet's INT8 files, faster on CPU; the default when the FP32 files aren't there")
-		kokoro   = flag.String("kokoro", "", "directory with kokoro-v1.0.onnx and voices-v1.0.bin (default: kokoro in -data)")
-		voice    = flag.String("voice", "af_heart", "Kokoro voice")
-		wake     = flag.String("wake", "hey computer", `wake word; "" to use Enter only`)
-		input    = flag.String("input", "", "microphone: part of its name; default device if empty")
-		output   = flag.String("output", "", "speaker: part of its name; default device if empty")
-		noAEC    = flag.Bool("no-echo-cancel", false, "turn off echo cancellation (headset, or an echo-cancelled mic)")
-		barge    = flag.String("barge-in", "wake", `what interrupts the agent by voice: "voice", "wake" or "off"`)
-		key      = flag.String("key", "", "keyboard event device whose Pause key interrupts, e.g. /dev/input/by-id/...-event-kbd")
-		noChime  = flag.Bool("no-chime", false, "turn off the ready chime that measures each session's audio latency")
-		latency  = flag.Duration("latency", 0, "speaker-to-microphone round trip (default 100ms)")
-		verbose  = flag.Bool("v", false, "log every state change")
+		ort       = flag.String("ort", "", "ONNX Runtime library, a path or loader name (default: in -data, else libonnxruntime.so)")
+		cuda      = flag.Bool("cuda", false, "run speech-to-text and text-to-speech on the GPU")
+		parakeet  = flag.String("parakeet", "", "directory with the Parakeet TDT 0.6B v3 ONNX files (default: parakeet in -data)")
+		int8      = flag.Bool("int8", false, "use Parakeet's INT8 files, faster on CPU; the default when the FP32 files aren't there")
+		kokoro    = flag.String("kokoro", "", "directory with kokoro-v1.0.onnx and voices-v1.0.bin (default: kokoro in -data)")
+		voice     = flag.String("voice", "af_heart", "Kokoro voice")
+		wake      = flag.String("wake", "hey computer", `wake word; "" to use Enter only`)
+		input     = flag.String("input", "", "microphone: part of its name; default device if empty")
+		output    = flag.String("output", "", "speaker: part of its name; default device if empty")
+		noAEC     = flag.Bool("no-echo-cancel", false, "turn off echo cancellation (headset, or an echo-cancelled mic)")
+		barge     = flag.String("barge-in", "wake", `what interrupts the agent by voice: "voice", "wake" or "off"`)
+		key       = flag.String("key", "", "keyboard event device whose Pause key interrupts, e.g. /dev/input/by-id/...-event-kbd")
+		noChime   = flag.Bool("no-chime", false, "turn off the ready chime that measures each session's audio latency")
+		cueListen = flag.String("cue-listening", "", `sound when it starts listening: "default" for the built-in one, a WAV file, or "" for none`)
+		cueThink  = flag.String("cue-thinking", "", `sound looped while it thinks: "default", a WAV file, or "" for none`)
+		cueIdle   = flag.String("cue-idle", "", `sound when the session ends: "default", a WAV file, or "" for none`)
+		latency   = flag.Duration("latency", 0, "speaker-to-microphone round trip (default 100ms)")
+		verbose   = flag.Bool("v", false, "log every state change")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -162,6 +165,10 @@ func main() {
 		fail(fmt.Errorf("%w; or use -text", err))
 	}
 	log.Info("models", "ort", a.ORT, "parakeet", a.Parakeet, "int8", a.INT8, "kokoro", a.Kokoro)
+	cues, err := loadCues(*cueListen, *cueThink, *cueIdle)
+	if err != nil {
+		fail(err)
+	}
 	bargeIn, ok := map[string]talkie.BargeIn{"voice": talkie.BargeInVoice, "wake": talkie.BargeInWakeWord, "off": talkie.BargeInOff}[*barge]
 	if !ok {
 		fail(fmt.Errorf(`-barge-in is "voice", "wake" or "off", not %q`, *barge))
@@ -185,6 +192,7 @@ func main() {
 		OutputDevice:            *output,
 		DisableEchoCancellation: *noAEC,
 		DisableReadyChime:       *noChime,
+		Cues:                    cues,
 		BargeIn:                 bargeIn,
 		AudioLatency:            *latency,
 		Logger:                  log,

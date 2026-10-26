@@ -25,6 +25,7 @@
   - tool errors go back to the model, and tool calls stay in the history.
 - Three skills: `office-lights` (Home Assistant), `web-search` (SearXNG) and `kids-story`.
 - `-text`: the same agent without audio, a turn per line of stdin.
+- `-cue-listening`, `-cue-thinking` and `-cue-idle`: optional sounds when it starts listening, while it thinks, and when the conversation ends, for a device without a screen; talkie's built-in sounds (`default`) or WAV files, all off by default.
 - A `turn_latency` log line per reply, from talkie's events and the agent's timings.
 - `-key`: the Pause key of a keyboard's event device interrupts.
 
