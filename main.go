@@ -165,6 +165,10 @@ func main() {
 		fail(fmt.Errorf("%w; or use -text", err))
 	}
 	log.Info("models", "ort", a.ORT, "parakeet", a.Parakeet, "int8", a.INT8, "kokoro", a.Kokoro)
+	if *cuda && a.INT8 && !*int8 {
+		log.Warn("using Parakeet's INT8 files on the GPU, because its FP32 files aren't there: INT8 is meant for the CPU. "+
+			"Download FP32 with get-assets.sh --fp32, or pass -int8 to choose INT8", "parakeet", a.Parakeet)
+	}
 	cues, err := loadCues(*cueListen, *cueThink, *cueIdle)
 	if err != nil {
 		fail(err)

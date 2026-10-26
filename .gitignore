@@ -2,3 +2,4 @@
 /assets/
 /bin/
 .env
+compose.local.yaml

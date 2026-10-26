@@ -6,7 +6,7 @@
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now eino-talkie-agent
 #
-# and follow it with `journalctl --user -u eino-talkie-agent -f`. Settings go
+# and follow it with `journalctl --user-unit eino-talkie-agent -f`. Settings go
 # in ~/.config/eino-talkie-agent/config.yaml; the skills' secrets, such as
 # HASSIO_TOKEN, as KEY=value lines in ~/.config/eino-talkie-agent/env.
 # `sudo loginctl enable-linger $USER` starts it at boot, before you log in.

@@ -19,9 +19,13 @@ agent framework.
 
 You need **Linux**, a microphone and a speaker, and an **OpenAI-compatible
 LLM server**. The default is Ollama at `http://localhost:11434/v1` with
-`gemma4:e4b` (`ollama pull gemma4:e4b`). Run the agent in Docker, or install
-it on the machine; both keep the same files in the same places, so you can
-switch between them.
+`gemma4:e4b` (`ollama pull gemma4:e4b`). Set `OLLAMA_KEEP_ALIVE=-1` on the
+Ollama server, so it keeps the model loaded: by default it unloads it after
+5 minutes idle, and the next question waits about 30 s for it to load again.
+The agent asks for one token when it starts, which loads it.
+
+Run the agent in Docker, or install it on the machine; both keep the same
+files in the same places, so you can switch between them.
 
 | On the host | What |
 |---|---|
@@ -33,63 +37,61 @@ switch between them.
 
 ## Run it in Docker
 
-### 1. Build an image
+[`compose.yaml`](compose.yaml) runs the agent and the
+[SearXNG](https://docs.searxng.org) its web-search skill uses. Clone this
+repository; the commands below run in it.
 
-Clone this repository and build the image for your machine:
+### 1. Choose an image and write `.env`
 
-| Image | For | Build |
+| Image | For | `.env` |
 |---|---|---|
-| `eino-talkie-agent:cpu` | any x86-64 or arm64 machine | `make image-cpu` |
-| `eino-talkie-agent:cuda` | x86-64 with an NVIDIA GPU, CUDA 12 | `make image-cuda` |
-| `eino-talkie-agent:jetson-orin` | Jetson Orin, JetPack 7.2 | `make image-jetson-orin`, on the Orin |
-| `eino-talkie-agent:jetson-xavier` | Jetson Xavier NX or AGX, JetPack 5 | `make image-jetson-xavier`, on the Xavier |
+| `eino-talkie-agent:cpu` | any x86-64 or arm64 machine | as it comes |
+| `eino-talkie-agent:cuda` | x86-64 with an NVIDIA GPU, CUDA 12 | `COMPOSE_FILE=compose.yaml:docker/compose.cuda.yaml` |
+| `eino-talkie-agent:jetson-xavier` | Jetson Xavier NX or AGX, JetPack 5 | `COMPOSE_FILE=compose.yaml:docker/compose.jetson.yaml` |
+| `eino-talkie-agent:jetson-orin` | Jetson Orin, JetPack 7.2 | the same, and `TALKIE_JETSON=jetson-orin` |
 
-Each image holds the agent, a matching ONNX Runtime, Python for the skills,
+Each image holds the agent, a matching ONNX Runtime, Python for the skills
 and talkie-core's `get-assets.sh`; the models stay on the host. The CUDA and
-Jetson images run speech-to-text and text-to-speech on the GPU
-(`EINO_TALKIE_CUDA=true`).
+Jetson images run speech-to-text and text-to-speech on the GPU.
 
-- `make image-cpu` builds both platforms as `eino-talkie-agent:cpu-amd64` and
-  `cpu-arm64` and tags the host's as `cpu`; the other platform needs QEMU
-  `binfmt` support (`IMAGE_PLATFORMS=linux/amd64` builds one).
+```
+cp .env.example .env
+sed -i "s/^SEARXNG_SECRET=.*/SEARXNG_SECRET=$(openssl rand -hex 32)/" .env
+```
+
+Then uncomment the lines your machine needs in `.env`: `COMPOSE_FILE` for a
+GPU, `TALKIE_UID` and `TALKIE_GID` if `id -u` and `id -g` aren't 1000, and
+`TALKIE_DATA` to keep the models elsewhere, such as `/data/talkie`. Build the
+image:
+
+```
+docker compose build agent
+```
+
 - The CUDA image needs the
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
-- The Jetson images build on [kokoro-run](https://github.com/androiddrew/kokoro-run)'s
-  ONNX Runtime base images, which compile ONNX Runtime for the Jetson's GPU.
-  The Xavier's is on Docker Hub,
+- The Jetson images build on the Jetson itself, on
+  [kokoro-run](https://github.com/androiddrew/kokoro-run)'s ONNX Runtime base
+  images, which compile ONNX Runtime for the Jetson's GPU. The Xavier's is on
+  Docker Hub,
   [`androiddrew/onnxruntime-jetson-xavier`](https://hub.docker.com/r/androiddrew/onnxruntime-jetson-xavier),
-  and `make image-jetson-xavier` pulls it. The Orin's isn't published: build
-  it once, on the Orin, in a kokoro-run checkout with `make
-  image-jetson-orin-onnxruntime` (about 4 hours); kokoro-run's README has the
-  memory settings for the compile.
+  and the build pulls it. The Orin's isn't published: build it once, on the
+  Orin, in a kokoro-run checkout with `make image-jetson-orin-onnxruntime`
+  (about 4 hours).
+- `make image-cpu` builds the CPU image for both amd64 and arm64, and `make
+  image-cuda`, `image-jetson-xavier` and `image-jetson-orin` the others, if you
+  prefer make.
 
 ### 2. Make the host directories
 
-Make them first, as yourself: Docker would otherwise create missing ones as
-root.
+Make them as yourself before the first run: Docker would otherwise create
+missing ones as root.
 
 ```
-mkdir -p ~/.config/eino-talkie-agent ~/.config/talkie ~/.local/share/eino-talkie-agent
-touch ~/.config/eino-talkie-agent/env && chmod 600 ~/.config/eino-talkie-agent/env
+mkdir -p ~/.config/eino-talkie-agent ~/.config/talkie ~/.config/pulse ~/.local/share/eino-talkie-agent
 ```
 
-Every `docker run` below uses these options, which run the agent as you,
-mount the directories, reach your sound server and share the host's network,
-so `localhost` is the host's Ollama, SearXNG and so on:
-
-```
-talkie=(--user "$(id -u):$(id -g)" --network host
-  --mount type=bind,src="$XDG_RUNTIME_DIR/pulse/native",dst=/run/pulse/native
-  -e PULSE_SERVER=unix:/run/pulse/native
-  -v ~/.config/eino-talkie-agent:/config/eino-talkie-agent
-  -v ~/.config/talkie:/config/talkie
-  -v ~/.local/share/eino-talkie-agent:/data/eino-talkie-agent
-  --env-file ~/.config/eino-talkie-agent/env)
-```
-
-To keep the models somewhere else, such as `/data/talkie`, change the last
-`-v` to `-v /data/talkie:/data/eino-talkie-agent`. See [Sound](#sound) for a
-machine without PipeWire or PulseAudio, and to use the Pause key.
+With `TALKIE_DATA`, make that directory instead of the last one.
 
 ### 3. Download the models
 
@@ -97,84 +99,108 @@ The image's `get-assets.sh` downloads Parakeet and Kokoro into the data
 directory, each file pinned and checked against its SHA256:
 
 ```
-docker run --rm "${talkie[@]}" --entrypoint get-assets.sh eino-talkie-agent:cpu \
-  -d /data/eino-talkie-agent --no-ort
+docker compose run --rm --entrypoint get-assets.sh agent -d /data/eino-talkie-agent --no-ort          # CPU
+docker compose run --rm --entrypoint get-assets.sh agent -d /data/eino-talkie-agent --no-ort --fp32   # GPU
 ```
 
-`--no-ort` skips ONNX Runtime, which the image has. On a GPU, add `--fp32` for
-Parakeet's FP32 files (2.5 GB), a little more accurate than INT8.
+`--no-ort` skips ONNX Runtime, which the image has. On a GPU, `--fp32` adds
+Parakeet's FP32 files (2.5 GB): its INT8 files, the default, are meant for
+the CPU. The agent warns if a GPU image finds only INT8.
 
-### 4. Install the skills
+### 4. Install the skills and settings
 
 ```
-docker run --rm "${talkie[@]}" eino-talkie-agent:cpu -install-skills
+docker compose run --rm agent -install-skills
 ```
 
-Put the skills' secrets in `~/.config/eino-talkie-agent/env` (see
-[Office lights](#office-lights)), and any settings in `config.yaml`.
+Settings go in `~/.config/eino-talkie-agent/config.yaml`, such as the
+devices and the [sounds](#sounds-instead-of-a-screen):
+
+```yaml
+input: P610              # part of the microphone's name
+output: P610
+cue-listening: default
+cue-thinking: default
+cue-idle: default
+```
+
+The skills' secrets, such as `HASSIO_TOKEN` (see
+[Office lights](#office-lights)), go in `~/.config/eino-talkie-agent/env` as
+`KEY=value` lines; `chmod 600` it.
 
 ### 5. Train talkie to the room
 
 Once per microphone and speaker. Stay quiet while it measures the room, then
-say the wake word ("hey computer") five times and read a sentence aloud;
-`-it` lets you press Enter between the steps:
+say the wake word ("hey computer") five times and read a sentence aloud,
+pressing Enter between the steps:
 
 ```
-docker run -it --rm "${talkie[@]}" eino-talkie-agent:cpu -train
+docker compose run --rm agent -train
 ```
 
 ### 6. Talk to it
 
 ```
-docker run -it --rm "${talkie[@]}" eino-talkie-agent:cpu                     # CPU
-docker run -it --rm --gpus all "${talkie[@]}" eino-talkie-agent:cuda         # NVIDIA GPU
-docker run -it --rm --runtime nvidia "${talkie[@]}" eino-talkie-agent:jetson-orin
+docker compose up -d          # start the agent and SearXNG
+docker compose logs -f agent  # follow it
+docker compose down           # stop both
 ```
 
-A short chime means it's listening. Flags go after the image name, for
-example `eino-talkie-agent:cpu -v`, and environment variables with `-e`, such
-as `-e EINO_TALKIE_MODEL=qwen3.5:9b`. `docker stop` stops it cleanly.
+A short chime means it's listening. After changing `config.yaml` or `env`,
+run `docker compose restart agent`; new or edited skills apply on the next
+question. To try a flag once, run `docker compose run --rm agent -v`, for
+example.
 
-To keep it running and start it when you log in, use the systemd user unit
-in [`systemd/eino-talkie-agent-docker.service`](systemd/eino-talkie-agent-docker.service).
-It starts the container after the sound server, which Docker's own restart
-policy can't wait for. Change its image, and add `--gpus all` or
-`--runtime nvidia` for a GPU, then install it as in
-[Run it as a service](#run-it-as-a-service).
+`docker compose up -d` doesn't start the agent again after a reboot: at boot,
+Docker would start it before your sound server. The systemd user unit in
+[`systemd/eino-talkie-agent-docker.service`](systemd/eino-talkie-agent-docker.service)
+runs `docker compose up` in your session instead. Set its `WorkingDirectory`
+to your checkout, then install it as in [Run it as a service](#run-it-as-a-service).
 
 ### Sound
 
-The options above connect to the host's PipeWire or PulseAudio server, the
-usual setup on a desktop: the agent sees the same microphones and speakers
-as your desktop, by the same names. With PulseAudio itself, rather than
-PipeWire, also mount its cookie:
-`--mount type=bind,src="$HOME/.config/pulse/cookie",dst=/config/pulse/cookie,readonly`.
-Without it, libpulse prints `Failed to load cookie file` at start-up, which
-PipeWire doesn't mind.
+The agent connects to the host's PipeWire or PulseAudio, the usual setup on
+a desktop and on a Jetson with a desktop: it sees the same microphones and
+speakers as your desktop, by the same names. Pick them with `input` and
+`output`, by part of their names; a USB headset's name picks its microphone,
+not the monitor of its speaker.
 
 On a machine with no sound server, such as a headless Jetson, use ALSA
-directly: replace the `--mount ... pulse` line and `PULSE_SERVER` with
-`--device /dev/snd --group-add "$(getent group audio | cut -d: -f3)"`. ALSA
-names the devices differently (for example `USB Audio`), and a device that a
-sound server is using can't be opened.
+directly: add `:docker/compose.alsa.yaml` to `COMPOSE_FILE`, and set
+`TALKIE_AUDIO_GID` to `getent group audio | cut -d: -f3`. ALSA names the
+devices differently (for example `USB Audio`), and a device that a sound
+server is using can't be opened.
 
-For the Pause key, pass the keyboard in and give its group:
-`--device /dev/input/by-id/<your-keyboard>-event-kbd --group-add "$(getent group input | cut -d: -f3)" -e EINO_TALKIE_KEY=/dev/input/by-id/<your-keyboard>-event-kbd`.
+For the Pause key, pass the keyboard in with a `compose.local.yaml` next to
+`compose.yaml` (ignored by git), add `:compose.local.yaml` to `COMPOSE_FILE`,
+and set `key` in `config.yaml` to the same path:
+
+```yaml
+services:
+  agent:
+    devices:
+      - /dev/input/by-id/<your-keyboard>-event-kbd
+    group_add:
+      - "995"   # getent group input | cut -d: -f3
+```
 
 ### Troubleshooting
 
-- **`--gpus all` fails with a missing `libnvidia-*.so`:**
-  the toolkit's device list is out of date after a driver update. Regenerate
-  it with `sudo nvidia-ctk cdi generate --output=/var/run/cdi/nvidia.yaml`
-  (or restart `nvidia-cdi-refresh.service`), or use `--runtime nvidia`
-  instead of `--gpus all`.
-- **No microphone or speaker:** check that `$XDG_RUNTIME_DIR/pulse/native`
-  exists on the host (`pactl info` names the server). The agent logs the
-  devices it opened at start-up.
+- **`could not select device driver "nvidia"`:** the NVIDIA Container
+  Toolkit isn't installed, or Docker hasn't been restarted since.
+- **A missing `libnvidia-*.so` when the container starts:** the toolkit's
+  device list is out of date after a driver update. Regenerate it with
+  `sudo nvidia-ctk cdi generate --output=/var/run/cdi/nvidia.yaml` (or
+  restart `nvidia-cdi-refresh.service`).
+- **`XDG_RUNTIME_DIR is unset` or a missing `pulse/native`:** run compose in
+  your login session, where the sound server is; `pactl info` names it.
+- **No microphone or speaker:** the agent logs the devices it opened at
+  start-up (`input=... output=...`); compare them with `pactl list short sources`
+  and `pactl list short sinks` on the host.
 - **`Permission denied` on a mounted directory:** it belongs to another user,
   or Docker created it as root; `sudo chown -R $USER` it.
-- **A host path in `config.yaml` doesn't apply:** the image pins `data`,
-  `ort`, `parakeet`, `kokoro` and `skills` to its own paths with environment
+- **A path in `config.yaml` doesn't apply:** the image pins `data`, `ort`,
+  `parakeet`, `kokoro` and `skills` to its own paths with environment
   variables, so a `config.yaml` shared with a local install can keep the
   host's paths.
 
@@ -197,11 +223,12 @@ You need **Go 1.25** and a C toolchain such as gcc (talkie-core uses CGO).
    curl -fsSL https://raw.githubusercontent.com/androiddrew/talkie-core/v0.2.0/scripts/get-assets.sh \
      | bash -s -- -d ~/.local/share/eino-talkie-agent
    ```
-   Add `--cuda` after the directory for the GPU build of ONNX Runtime, which
-   needs CUDA 12 and cuDNN 9. To keep the models elsewhere, such as
+   On an NVIDIA GPU, add `--cuda --fp32` after the directory: the GPU build
+   of ONNX Runtime, which needs CUDA 12 and cuDNN 9, and Parakeet's FP32
+   files (2.5 GB), since its INT8 files are meant for the CPU. To keep the models elsewhere, such as
    `/data/talkie`, give that directory to `-d` and put `data: /data/talkie`
    in `config.yaml`. On a Jetson, install ONNX Runtime with CUDA yourself,
-   add `--no-ort`, and set `ort` to its library.
+   add `--no-ort --fp32`, and set `ort` to its library.
 3. **Train talkie to the room**, once per microphone and speaker: stay quiet
    while it measures the room, then say the wake word ("hey computer") five
    times and read a sentence aloud.
@@ -225,7 +252,7 @@ curl -fsSL -o ~/.config/systemd/user/eino-talkie-agent.service \
   https://raw.githubusercontent.com/androiddrew/example-eino-talkie-agent/main/systemd/eino-talkie-agent.service
 systemctl --user daemon-reload
 systemctl --user enable --now eino-talkie-agent
-journalctl --user -u eino-talkie-agent -f        # its log
+journalctl --user-unit eino-talkie-agent -f        # its log
 ```
 
 - It runs `~/go/bin/example-eino-talkie-agent`; edit `ExecStart` if
@@ -357,7 +384,7 @@ spec:
 | Skills | `$XDG_CONFIG_HOME/eino-talkie-agent/skills/` | `-skills` |
 | ONNX Runtime and the models | `$XDG_DATA_HOME/eino-talkie-agent/` | `-data`, `EINO_TALKIE_DATA` |
 | Room profiles (talkie-core's) | `$XDG_CONFIG_HOME/talkie/rooms/` | |
-| The skills' secrets (read by the systemd unit and `docker run --env-file`) | `$XDG_CONFIG_HOME/eino-talkie-agent/env` | |
+| The skills' secrets (read by the systemd unit and compose) | `$XDG_CONFIG_HOME/eino-talkie-agent/env` | |
 
 `$XDG_CONFIG_HOME` defaults to `~/.config` and `$XDG_DATA_HOME` to
 `~/.local/share`. The data directory has the layout `get-assets.sh -d`
@@ -471,38 +498,20 @@ is Python with only the standard library. It prints the top five results,
 each with a title, a snippet and its source, for the model to answer from.
 `SEARXNG_URL` selects the instance; the default is `http://127.0.0.1:8888`.
 
-To run SearXNG on this machine, listening only locally, with the JSON API
-on, write `~/.config/searxng/settings.yml`:
-
-```yaml
-use_default_settings: true
-server:
-  secret_key: "..."         # openssl rand -hex 32
-  limiter: false
-  image_proxy: false
-search:
-  safe_search: 1
-  formats: [html, json]
-outgoing:
-  request_timeout: 1.5      # a voice answer waits on the search
-  max_request_timeout: 2.0
-engines:
-  - name: brave             # rate-limits SearXNG
-    disabled: true
-```
-
-Then start it:
+In Docker, `compose.yaml` runs SearXNG next to the agent, listening only on
+`127.0.0.1:8888`, with the JSON API on: its settings are
+[`docker/searxng/settings.yml`](docker/searxng/settings.yml), and its secret
+key is `SEARXNG_SECRET` in `.env`. With the agent installed locally, run just
+SearXNG from a checkout, after writing `.env` as in step 1 of
+[Run it in Docker](#run-it-in-docker):
 
 ```
-docker run -d --name searxng --restart unless-stopped -p 127.0.0.1:8888:8080 \
-  -v ~/.config/searxng:/etc/searxng searxng/searxng:latest
+docker compose up -d searxng
 ```
 
-The container takes ownership of `settings.yml`. To edit it later, run
-`docker exec -it searxng vi /etc/searxng/settings.yml`, then
-`docker restart searxng`. Searches take 0.5 to 1.5 s. Some engines refuse
-SearXNG (DuckDuckGo sometimes shows a CAPTCHA), but Google's results come
-through.
+It starts again after a reboot. Searches take 0.5 to 1.5 s. Some engines
+refuse SearXNG (DuckDuckGo sometimes shows a CAPTCHA), but Google's results
+come through.
 
 The skill tells the model to search before answering any question about
 facts in the world, especially anything recent, and not to search for
@@ -652,7 +661,8 @@ was complete about 1 s after the agent was called.
 - `config.go` finds the XDG directories, applies the environment and
   `config.yaml` to the flags, and finds the models in the data directory.
 - `train.go` is `-train`, room training through talkie-core's `Train`.
-- `docker/` has the images, `systemd/` the user units.
+- `compose.yaml` and `docker/` have the images and their compose files,
+  `systemd/` the user units.
 - `latency.go` joins talkie's events from `Config.OnEvent` with the agent's
   timings over a buffered channel. OnEvent never blocks: when the channel is
   full, the record is dropped and counted.
@@ -686,9 +696,10 @@ another model, and `EINO_TALKIE_TEST_TEMP` to test another temperature.
   arguments. Install only skills you trust.
 - Every skill's instructions are in every turn's prompt, which suits a few
   short skills.
-- The Jetson images haven't been built or run yet; the CPU and CUDA images
-  have, on x86-64 with PipeWire. In Docker, ALSA can't open a device a sound
-  server on the host is using.
+- The CPU and CUDA images have run on x86-64 with PipeWire, and the Jetson
+  Xavier image on an AGX Xavier with PulseAudio and a USB headset. The Jetson
+  Orin image hasn't been built yet. In Docker, ALSA can't open a device a
+  sound server on the host is using.
 
 ## License
 
